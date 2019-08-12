@@ -1,0 +1,12 @@
+[package]
+name = "mokuroku"
+version = "0.1.0"
+authors = ["Nathan Fiedler <nathanfiedler@fastmail.fm>"]
+edition = "2018"
+description = "Secondary indices like CouchDB for RocksDB in Rust."
+repository = "https://github.com/nlfiedler/mokuroku"
+readme = "README.md"
+keywords = ["couchdb", "database", "index", "pouchdb", "rocksdb", "search"]
+license = "Apache-2.0"
+
+[dependencies]
