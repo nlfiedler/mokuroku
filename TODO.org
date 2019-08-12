@@ -1,0 +1,88 @@
+* mokuroku
+** Design
+*** Usage
+**** Client creates the =RocksDB= instance, passes to index functions
+**** All operations must go through index functions (put, delete, etc)
+**** Register callbacks to extract index keys
+**** Query on the index defined by the registered callbacks
+**** Functions to run the index as needed, such as for existing data
+*** Data Model
+**** Indices are named (e.g. "etags") by the application
+**** Index key consists of the output bytes from ~map~ plus a unique suffix
+***** Because ~map~ may output non-unique values, the key must be made unique
+***** Suffix needs to be sufficiently unique even if many records are written in a short time
+**** Output of the ~map~ function forms the value for the index row
+***** In addition to the key, the map function also emits other data
+***** A single invocation of the map function may emit multiple rows of data
+**** Specifying a ~reduce~ function means index rows consist of key and value is reduce output
+***** e.g. ~count~ would result in key from map output and value from reduce output
+***** e.g. [('foo', 12), ('bar', 4), ('quux', 101)]
+**** Indices must be namespaced to avoid collision with application data
+***** PouchDB creates a separate LevelDB instance with =mrview= in the name
+***** RocksDB supports column families, which seems a good approach
+**** Querying index employs the RocksDB key prefix iterator
+***** As a result the query operation returns an iterator
+***** Results returned are the data from the map operation
+***** RocksDB can quickly scan to a key prefix to start iterating
+***** Technically not special, but the Rust API calls it =prefix_iterator=
+**** When querying mulitple keys, results are returned in the given key order
+*** References
+**** https://misfra.me/2017/01/18/how-to-implement-secondary-indexes/
+***** index key is the information you're searching for, value is the original key
+***** important to keep the keys unique and canonically formed
+**** RocksDB FAQ seems to suggest using column families for different "key spaces"
+***** c.f. https://github.com/facebook/rocksdb/wiki/Column-Families
+** Implementation
+*** Initial Setup
+**** DONE Use =cargo new= to create the initial set of files
+**** DONE Name the project =mokuroku=
+**** DONE Describe the motivation and such in the README file
+**** TODO Add a "dev" dependency on RocksDB for the sake of testing
+*** Indices are stored in separate column families
+**** Need consists of our special prefix (e.g. =mrview=) and the index name
+**** Each registered index has an associated column family handle
+*** Row deletions must update the appropriate index!
+*** API Details
+**** Create index
+***** operation should be idempotent
+**** Delete index
+**** List indices
+**** Query index
+***** returns an iterator to return the results as needed
+***** results are the output from the map function
+***** rows are returned in the same order as the supplied keys array
+***** optional keys value to set start/end of results range
+***** optional number of rows to skip
+***** optional number of rows to limit
+**** Run index
+***** As a means of building the index with existing data
+***** Maybe the data was modified externally, for example
+**** Index cleanup
+***** Called by the application in an ad hoc fashion
+***** Delete any column families with our prefix that do not match any registered index
+*** Development
+**** TODO Consider the API for the MR functions
+***** what is the structure returned?
+***** how should the map results be serialized?
+***** serialized index value must include the primary key as well
+**** TODO Read the LSM key/value stores research paper on secondary index algorithms
+***** Has various approaches to implementing indices
+**** TODO See some of the PouchDB implementation details
+***** =pouchdb/packages/node_modules/pouchdb-abstract-mapreduce/src/index.js=
+**** TODO Set up the basic API for handling RocksDB and column families
+**** TODO Function to build an index immediately
+**** TODO Build an index and put/delete pass-through functions
+**** TODO Query an index with no key
+**** TODO Build missing index when first queried
+**** TODO Query an index with a single key
+**** TODO Query an index with multiple keys
+**** TODO Clean up stale indices
+*** Publishing
+**** TODO Start a changelog
+**** TODO Write API documentation at the module level
+***** assumes we already wrote function-level documentation
+**** TODO Write a quick example for the =README.md=
+**** TODO Write a simple example crate in =examples= directory
+**** DONE Populate =Cargo.toml= with useful meta information
+**** TODO Push to GitHub
+**** TODO Publish to crates.io
