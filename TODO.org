@@ -63,7 +63,7 @@
 ***** Called by the application in an ad hoc fashion
 ***** Delete any column families with our prefix that do not match any registered view
 *** Development
-**** TODO Define the library API
+**** DONE Define the library API
 ***** library function: =emit=
 ****** receives the bytes for the index key (prefix)
 ****** receives the bytes for the index value
@@ -95,7 +95,7 @@
 ****** returns true if the record key/value is of interest to this view
 ****** receives the key/value as bytes, application must decide if matches
 ****** called by the library when (re)building the index with existing data
-**** TODO Consider how =delete= will update the indices
+**** DONE Consider how =delete= will update the indices
 ***** this could be what PouchDB refers to as ~stale~ results
 ***** how to detect stale results?
 ***** are stale results returned in the scan?
@@ -107,7 +107,7 @@
 ***** view iterator could check bloom filter before returning results
 **** DONE See some of the PouchDB implementation details
 ***** =pouchdb/packages/node_modules/pouchdb-abstract-mapreduce/src/index.js=
-**** TODO Define the trait(s) and function scaffolding to get the API right
+**** DONE Define the trait(s) and function scaffolding to get the API right
 ***** maybe the library should manage the RocksDB struct
 ***** app manages the library struct as it would have the RocksDB struct
 ***** library would expose common functions: =put=, =get=, =delete=
@@ -116,10 +116,12 @@
 ****** that way the app gets the exact type deserialized from the bytes
 ****** indirectly could implement =Default= and then invoke deserialize on it
 ***** library would provide escape hatch =db()= function to return RocksDB reference
-**** TODO Set up the basic API for handling RocksDB and column families
+**** TODO Set up the basic API for defining views
+***** library will manage column families
 **** TODO Function to build an index immediately
 **** TODO Build an index and put/delete pass-through functions
 ***** serialized index value must include the primary key as well
+**** TODO Write test with =put=, =get=, =delete=, =get=, =delete= with index to ensure same behavior as w/o index
 **** TODO Query an index with no key
 ***** returns all of the results in the index unfiltered
 **** TODO Build missing index when first queried

@@ -5,17 +5,27 @@ use failure::Error;
 use rocksdb::DB;
 use std::path::Path;
 
+///
+/// `Document` defines the operations required for building the secondary index.
+/// Any data that should have an index should be represented by a type that
+/// implements this trait, and be stored in the database using the `Database`
+/// wrapper.
+///
 pub trait Document: Sized {
+    ///
     /// Deserializes a sequence of bytes to return a value of this type. The key
     /// is provided in case it is required for proper deserialization.
+    ///
     fn from_bytes(key: &[u8], value: &[u8]) -> Result<Self, Error>;
-
+    ///
     /// Serializes this value into a sequence of bytes.
+    ///
     fn to_bytes(&self) -> Result<Vec<u8>, Error>;
 }
 
 ///
-/// An instance of the database for reading and writing records to disk.
+/// An instance of the database for reading and writing records to disk. This
+/// wrapper manages the secondary indices defined by the application.
 ///
 pub struct Database {
     /// RocksDB instance.
@@ -98,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn get_put() {
+    fn put_get_delete() {
         let db_path = "tmp/test/database";
         let _ = fs::remove_dir_all(db_path);
         let dbase = Database::new(Path::new(db_path)).unwrap();
@@ -118,5 +128,14 @@ mod tests {
         assert_eq!(document.key, actual.key);
         assert_eq!(document.len, actual.len);
         assert_eq!(document.val, actual.val);
+        let result = dbase.delete(&key);
+        assert!(result.is_ok());
+        let result = dbase.get::<LenVal>(&key);
+        assert!(result.is_ok());
+        let option = result.unwrap();
+        assert!(option.is_none());
+        // repeated delete is ok and not an error
+        let result = dbase.delete(&key);
+        assert!(result.is_ok());
     }
 }
