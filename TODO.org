@@ -3,28 +3,28 @@
 *** Usage
 **** Client creates the =RocksDB= instance, passes to index functions
 **** All operations must go through index functions (put, delete, etc)
-**** Register callbacks to extract index keys
-**** Query on the index defined by the registered callbacks
-**** Functions to run the index as needed, such as for existing data
+**** Register view definitions to provide index keys and values
+**** Query on the index with or without keys for filtering the results
+**** Functions to build the index as needed, such as for existing data
 *** Data Model
 **** Indices are named (e.g. "etags") by the application
-**** Index key consists of the output bytes from ~map~ plus a unique suffix
-***** Because ~map~ may output non-unique values, the key must be made unique
+**** Index key consists of a prefix from the app plus a unique suffix
+***** Because the app may output non-unique values, the key must be made unique
 ***** Suffix needs to be sufficiently unique even if many records are written in a short time
-**** Output of the ~map~ function forms the value for the index row
-***** In addition to the key, the map function also emits other data
-***** A single invocation of the map function may emit multiple rows of data
+**** App outputs additional data as the value for the index row
+***** Application provides a mapping function to provide index keys and values
+***** In addition to the key, the mapping function also emits other data
+***** A single invocation of the mapping function may emit multiple rows of data
 **** Specifying a ~reduce~ function means index rows consist of key and value is reduce output
 ***** e.g. ~count~ would result in key from map output and value from reduce output
 ***** e.g. [('foo', 12), ('bar', 4), ('quux', 101)]
 **** Indices must be namespaced to avoid collision with application data
 ***** PouchDB creates a separate LevelDB instance with =mrview= in the name
-***** RocksDB supports column families, which seems a good approach
+***** RocksDB supports column families for this purpose
 **** Querying index employs the RocksDB key prefix iterator
-***** As a result the query operation returns an iterator
-***** Results returned are the data from the map operation
+***** Consequently the query operation returns an iterator
+***** Results returned are the data from the mapping function
 ***** RocksDB can quickly scan to a key prefix to start iterating
-***** Technically not special, but the Rust API calls it =prefix_iterator=
 **** When querying mulitple keys, results are returned in the given key order
 *** References
 **** https://misfra.me/2017/01/18/how-to-implement-secondary-indexes/
@@ -37,7 +37,7 @@
 **** DONE Use =cargo new= to create the initial set of files
 **** DONE Name the project =mokuroku=
 **** DONE Describe the motivation and such in the README file
-**** TODO Add a "dev" dependency on RocksDB for the sake of testing
+**** TODO Add RocksDB as a dependency
 *** Indices are stored in separate column families
 **** Need consists of our special prefix (e.g. =mrview=) and the index name
 **** Each registered index has an associated column family handle
@@ -46,37 +46,97 @@
 **** Create index
 ***** operation should be idempotent
 **** Delete index
+***** remove the registered view functions
+***** remove the corresponding column family
 **** List indices
 **** Query index
 ***** returns an iterator to return the results as needed
-***** results are the output from the map function
+***** results are the output from the app mapping function
 ***** rows are returned in the same order as the supplied keys array
 ***** optional keys value to set start/end of results range
 ***** optional number of rows to skip
 ***** optional number of rows to limit
-**** Run index
-***** As a means of building the index with existing data
+**** Build index
+***** As a means of constructing the index with existing data
 ***** Maybe the data was modified externally, for example
 **** Index cleanup
 ***** Called by the application in an ad hoc fashion
-***** Delete any column families with our prefix that do not match any registered index
+***** Delete any column families with our prefix that do not match any registered view
 *** Development
-**** TODO Consider the API for the MR functions
-***** what is the structure returned?
-***** how should the map results be serialized?
-***** serialized index value must include the primary key as well
-**** TODO Read the LSM key/value stores research paper on secondary index algorithms
-***** Has various approaches to implementing indices
-**** TODO See some of the PouchDB implementation details
+**** TODO Define the library API
+***** library function: =emit=
+****** receives the bytes for the index key (prefix)
+****** receives the bytes for the index value
+****** application is responsible for serde of the key(prefix) and value
+****** library will add the unique suffix to the index key
+****** look at attaching the =emit= to a data structure managed inside the =put= call
+****** cache the emitted pairs until the =put= completes successfully
+***** library function: =put=
+****** app provides key as bytes and value as trait implementation
+****** trait provides =map= and =serialize= functions (among others)
+****** library will invoke =map= and =serialize= before writing to the database
+****** library will write key as-is and output of =serialize= as the value
+****** library will write index entries corresponding to the values emitted
+***** define a trait that has the functions needed to implement a "view"
+****** app implements this trait for all its types stored in the database
+****** c.f. Rust book chapter 17
+****** i.e. use generics to parameterize the index structures
+***** trait function: =map=
+****** invokes an =emit= function (received as a parameter?)
+****** each emitted value is stored as a separate key/value in the index
+***** trait function: =serialize=
+****** this is for the application data, not the index
+****** converts the data type a vector of bytes, written to RocksDB as-is
+***** trait function: =deserialize=
+****** this is for the application data, not the index
+****** converts a vector of bytes (as read from RocksDB) into the data type
+****** called by the library when (re)building the index with existing data
+***** trait function: =match=
+****** returns true if the record key/value is of interest to this view
+****** receives the key/value as bytes, application must decide if matches
+****** called by the library when (re)building the index with existing data
+**** TODO Consider how =delete= will update the indices
+***** this could be what PouchDB refers to as ~stale~ results
+***** how to detect stale results?
+***** are stale results returned in the scan?
+***** would we eagerly remove the stale results?
+***** a bloom filter of deleted entries
+****** store in the database, probabaly
+****** if ID is not in the filter, then it is not deleted
+***** prune index of stale entries on scan
+***** view iterator could check bloom filter before returning results
+**** DONE See some of the PouchDB implementation details
 ***** =pouchdb/packages/node_modules/pouchdb-abstract-mapreduce/src/index.js=
+**** TODO Define the trait(s) and function scaffolding to get the API right
+***** maybe the library should manage the RocksDB struct
+***** app manages the library struct as it would have the RocksDB struct
+***** library would expose common functions: =put=, =get=, =delete=
+***** should be able to parameterize the =get= to use a trait function, right?
+****** like the =FromStr= trait, it takes an argument and returns a =Self=
+****** that way the app gets the exact type deserialized from the bytes
+****** indirectly could implement =Default= and then invoke deserialize on it
+***** library would provide escape hatch =db()= function to return RocksDB reference
 **** TODO Set up the basic API for handling RocksDB and column families
 **** TODO Function to build an index immediately
 **** TODO Build an index and put/delete pass-through functions
+***** serialized index value must include the primary key as well
 **** TODO Query an index with no key
+***** returns all of the results in the index unfiltered
 **** TODO Build missing index when first queried
+***** read each record in the database
+***** invoke =match= for the defined trait to know if this record is handled by this trait
+****** receives the key and value from the database
+****** e.g. trait would look at the key prefix or attempt to deserialize
+***** invoke =deserialized= for the matching trait
+***** invoke =map= for the matching trait
+***** write the emitted index key/value pairs
 **** TODO Query an index with a single key
+***** returns only results whose key matches the filter
 **** TODO Query an index with multiple keys
+***** returns only results whose key matches each of the keys
+***** results returned in the same order as the keys
 **** TODO Clean up stale indices
+**** TODO Consider options for thread safe operations
 *** Publishing
 **** TODO Start a changelog
 **** TODO Write API documentation at the module level
@@ -86,3 +146,10 @@
 **** DONE Populate =Cargo.toml= with useful meta information
 **** TODO Push to GitHub
 **** TODO Publish to crates.io
+*** Further Work
+**** TODO Read the LSM key/value stores research paper on secondary index algorithms
+***** Has various approaches to implementing indices
+** Alternative Databases
+*** [[https://github.com/spacejam/sled][sled]] is similar to RocksDB, written in Rust
+**** would use their ~keyspace~ in place of column families
+**** would use their ID generator in place of ULID or whatever
