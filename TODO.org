@@ -33,11 +33,6 @@
 **** RocksDB FAQ seems to suggest using column families for different "key spaces"
 ***** c.f. https://github.com/facebook/rocksdb/wiki/Column-Families
 ** Implementation
-*** Initial Setup
-**** DONE Use =cargo new= to create the initial set of files
-**** DONE Name the project =mokuroku=
-**** DONE Describe the motivation and such in the README file
-**** TODO Add RocksDB as a dependency
 *** Indices are stored in separate column families
 **** Need consists of our special prefix (e.g. =mrview=) and the index name
 **** Each registered index has an associated column family handle
@@ -69,29 +64,27 @@
 ****** receives the bytes for the index value
 ****** application is responsible for serde of the key(prefix) and value
 ****** library will add the unique suffix to the index key
-****** look at attaching the =emit= to a data structure managed inside the =put= call
-****** cache the emitted pairs until the =put= completes successfully
 ***** library function: =put=
 ****** app provides key as bytes and value as trait implementation
-****** trait provides =map= and =serialize= functions (among others)
-****** library will invoke =map= and =serialize= before writing to the database
-****** library will write key as-is and output of =serialize= as the value
+****** trait provides =map= and =to_bytes= functions (among others)
+****** library will invoke =map= and =to_bytes= before writing to the database
+****** library will write key as-is and output of =to_bytes= as the value
 ****** library will write index entries corresponding to the values emitted
 ***** define a trait that has the functions needed to implement a "view"
 ****** app implements this trait for all its types stored in the database
 ****** c.f. Rust book chapter 17
 ****** i.e. use generics to parameterize the index structures
 ***** trait function: =map=
-****** invokes an =emit= function (received as a parameter?)
+****** invokes an =emit= function received as a parameter
 ****** each emitted value is stored as a separate key/value in the index
-***** trait function: =serialize=
+***** trait function: =to_bytes=
 ****** this is for the application data, not the index
 ****** converts the data type a vector of bytes, written to RocksDB as-is
-***** trait function: =deserialize=
+***** trait function: =from_bytes=
 ****** this is for the application data, not the index
 ****** converts a vector of bytes (as read from RocksDB) into the data type
 ****** called by the library when (re)building the index with existing data
-***** trait function: =match=
+***** trait function: =should_map=
 ****** returns true if the record key/value is of interest to this view
 ****** receives the key/value as bytes, application must decide if matches
 ****** called by the library when (re)building the index with existing data
@@ -116,15 +109,28 @@
 ****** that way the app gets the exact type deserialized from the bytes
 ****** indirectly could implement =Default= and then invoke deserialize on it
 ***** library would provide escape hatch =db()= function to return RocksDB reference
-**** TODO Set up the basic API for defining views
+**** DONE Define the mapping of the named indices to the mapping functions
 ***** library will manage column families
-**** TODO Function to build an index immediately
-**** TODO Build an index and put/delete pass-through functions
-***** serialized index value must include the primary key as well
+***** pass a set of default instances of the traits to the =new()= call
+***** library will add special prefix to the view names
+**** DONE Update the index in the put pass-through function
+**** DONE Query an index with no key, returns all results
+**** TODO Serialized index value must include the primary key
+**** TODO Index key must include unique suffix (e.g. ulid)
+**** TODO Query must return an iterator that provides index key/value pairs
+***** returns (key, doc_id, value) 3-tuple
+***** strip the unique suffix from the index key
+***** split the document key from the index value
+**** TODO =map()= should be invoked for all registered views on =put()=
+**** TODO How should library invoke =map= on every kind of document?
+***** Using =&Self= in =map()= is the same as =&self= so not really generic
+**** TODO Is there a clean way to define and pass the =emit= to the traits?
+**** TODO How to delete with errors in the =put()= index building?
+***** TODO getting the cf handle can return =None=
+***** TODO invoking =put_cf()= may result in an error
 **** TODO Write test with =put=, =get=, =delete=, =get=, =delete= with index to ensure same behavior as w/o index
-**** TODO Query an index with no key
-***** returns all of the results in the index unfiltered
 **** TODO Build missing index when first queried
+***** how to tell that the index has not been built?
 ***** read each record in the database
 ***** invoke =match= for the defined trait to know if this record is handled by this trait
 ****** receives the key and value from the database
@@ -137,6 +143,7 @@
 **** TODO Query an index with multiple keys
 ***** returns only results whose key matches each of the keys
 ***** results returned in the same order as the keys
+**** TODO Function to build an index immediately
 **** TODO Clean up stale indices
 **** TODO Consider options for thread safe operations
 *** Publishing
