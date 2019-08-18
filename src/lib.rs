@@ -4,6 +4,7 @@
 use failure::Error;
 use rocksdb::{DBIterator, IteratorMode, Options, DB};
 use std::path::Path;
+use ulid::Ulid;
 
 ///
 /// `Document` defines the operations required for building the secondary index.
@@ -46,7 +47,10 @@ pub struct Database {
     db: DB,
 }
 
+// Secondary indices are column families with our special prefix.
 const VIEW_PREFIX: &str = "mrview-";
+// Key suffix is a dash and 26 character ULID hex string.
+const KEY_SUFFIX_LEN: usize = 27;
 
 impl Database {
     ///
@@ -96,8 +100,15 @@ impl Database {
         let mut view_name = String::from(VIEW_PREFIX);
         view_name.push_str(&D::view_name());
         let cf = self.db.cf_handle(&view_name).unwrap();
-        let emit = |key: &[u8], value: &[u8]| {
-            let _ = self.db.put_cf(cf, key, value);
+        let emit = |ikey: &[u8], ivalue: &[u8]| {
+            let ulid = Ulid::new().to_string();
+            // to allow for duplicate keys emitted from the map function, add a
+            // unique suffix to the index key
+            let mut uniq_key: Vec<u8> = Vec::with_capacity(ikey.len() + KEY_SUFFIX_LEN);
+            uniq_key.extend_from_slice(&ikey[..]);
+            uniq_key.push(b'-');
+            uniq_key.extend_from_slice(&ulid.as_bytes());
+            let _ = self.db.put_cf(cf, &uniq_key, ivalue);
         };
         D::map(&value, emit);
         Ok(())
@@ -125,12 +136,45 @@ impl Database {
     ///
     /// Query on the given index, returning all results.
     ///
-    pub fn query(&self, view: &str) -> Result<DBIterator, Error> {
+    pub fn query(&self, view: &str) -> Result<QueryIterator, Error> {
         let mut view_name = String::from(VIEW_PREFIX);
         view_name.push_str(view);
         let cf = self.db.cf_handle(&view_name).unwrap();
         let iter = self.db.iterator_cf(cf, IteratorMode::Start)?;
-        Ok(iter)
+        let qiter = QueryIterator::new(iter);
+        Ok(qiter)
+    }
+}
+
+///
+/// QueryIterator returns the results from a database query as a tuple of the
+/// key and value as boxed slices of u8.
+///
+pub struct QueryIterator<'a> {
+    /// Reference to Database for fetching records.
+    dbiter: DBIterator<'a>,
+}
+
+impl<'a> QueryIterator<'a> {
+    /// Construct a new QueryIterator from the DBIterator.
+    fn new(dbiter: DBIterator<'a>) -> Self {
+        Self { dbiter }
+    }
+}
+
+impl<'a> Iterator for QueryIterator<'a> {
+    type Item = (Box<[u8]>, Box<[u8]>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((key, value)) = self.dbiter.next() {
+            let mut short_vec: Vec<u8> = Vec::new();
+            // tear off the dash and ULID suffix
+            let end = key.len() - KEY_SUFFIX_LEN;
+            short_vec.extend_from_slice(&key[..end]);
+            let short_key = short_vec.into_boxed_slice();
+            return Some((short_key, value));
+        }
+        None
     }
 }
 
