@@ -125,7 +125,7 @@
 **** TODO How should library invoke =map= on every kind of document?
 ***** Using =&Self= in =map()= is the same as =&self= so not really generic
 **** TODO Is there a clean way to define and pass the =emit= to the traits?
-**** TODO How to delete with errors in the =put()= index building?
+**** TODO How to deal with errors in the =put()= index building?
 ***** TODO getting the cf handle can return =None=
 ***** TODO invoking =put_cf()= may result in an error
 **** TODO Write test with =put=, =get=, =delete=, =get=, =delete= with index to ensure same behavior as w/o index

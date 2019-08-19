@@ -12,7 +12,7 @@ use ulid::Ulid;
 /// `Document` defines the operations required for building the secondary index.
 /// Any data that should have an index should be represented by a type that
 /// implements this trait, and be stored in the database using the `Database`
-/// wrapper.
+/// wrapper method `put()`.
 ///
 pub trait Document: Sized {
     ///
@@ -31,9 +31,7 @@ pub trait Document: Sized {
     fn view_name() -> String;
     ///
     /// Map a value to zero or more index key/value pairs, as passed to the
-    /// given `emit` function (first argument is the key, second is value). If
-    /// the value is a type that this trait implementation does not implement,
-    /// it should be quietly ignored.
+    /// given `emit` function (first argument is the key, second is value).
     ///
     fn map<P>(&self, emit: P)
     where
@@ -55,6 +53,8 @@ const VIEW_PREFIX: &str = "mrview-";
 const KEY_SUFFIX_LEN: usize = 27;
 // Maximum size in bytes of a record key for application data.
 const MAX_KEY_LEN: usize = 4_294_967_296;
+// Number of bytes used to represent the document key.
+const SIZEOF_KEY: usize = 4;
 
 impl Database {
     ///
@@ -115,7 +115,7 @@ impl Database {
             uniq_key.extend_from_slice(&ulid.as_bytes());
             // index value is the original document key and the given value,
             // plus the length encoding for each (so we can separate them later)
-            let mut id_value: Vec<u8> = Vec::with_capacity(key.len() + ivalue.len() + 4);
+            let mut id_value: Vec<u8> = Vec::with_capacity(key.len() + ivalue.len() + SIZEOF_KEY);
             let _ = id_value.write((key.len() as u32).to_le_bytes().as_ref());
             let _ = id_value.write(key);
             let _ = id_value.write(ivalue);
@@ -197,20 +197,20 @@ impl<'a> Iterator for QueryIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some((key, value)) = self.dbiter.next() {
-            let mut short_vec: Vec<u8> = Vec::new();
-            // tear off the dash and ULID suffix
+            // remove the dash and ULID suffix from the index key
             let end = key.len() - KEY_SUFFIX_LEN;
-            short_vec.extend_from_slice(&key[..end]);
-            let short_key = short_vec.into_boxed_slice();
+            let mut short_key: Vec<u8> = Vec::with_capacity(end);
+            short_key.extend_from_slice(&key[..end]);
             // split the index value into the original document key and the
             // index value provided by the application
             let key_len = read_le_u32(&value) as usize;
             let mut doc_id: Vec<u8> = Vec::with_capacity(key_len);
-            doc_id.extend_from_slice(&value[4..key_len + 4]);
-            let mut ivalue: Vec<u8> = Vec::with_capacity(value.len() - 4 - key_len);
-            ivalue.extend_from_slice(&value[4 + key_len..]);
+            let key_end = key_len + SIZEOF_KEY;
+            doc_id.extend_from_slice(&value[SIZEOF_KEY..key_end]);
+            let mut ivalue: Vec<u8> = Vec::with_capacity(value.len() - key_end);
+            ivalue.extend_from_slice(&value[key_end..]);
             return Some(QueryResult::new(
-                short_key,
+                short_key.into_boxed_slice(),
                 ivalue.into_boxed_slice(),
                 doc_id.into_boxed_slice(),
             ));
