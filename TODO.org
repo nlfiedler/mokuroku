@@ -119,10 +119,8 @@
 **** DONE Query must return an iterator that provides index key/value pairs
 ***** returns (key, value) tuple
 ***** strip the unique suffix from the index key
-**** TODO Serialized index value must include the primary key
-***** likely need to serialize a structure that has the size of each part
-***** library does not control the contents of either the key or value
-**** TODO Query iterator must split document key off of index value
+**** DONE Serialized index value must include the primary key
+**** DONE Query iterator must split document key off of index value
 **** TODO =map()= should be invoked for all registered views on =put()=
 **** TODO How should library invoke =map= on every kind of document?
 ***** Using =&Self= in =map()= is the same as =&self= so not really generic
