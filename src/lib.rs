@@ -379,7 +379,11 @@ mod tests {
             Ok(encoded)
         }
 
-        fn map(&self, _view: &str, _emitter: &Emitter) -> Result<(), Error> {
+        fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error> {
+            if view == "value" {
+                let empty: Vec<u8> = Vec::new();
+                emitter.emit(self.val.as_bytes(), &empty)?;
+            }
             Ok(())
         }
     }
@@ -393,12 +397,22 @@ mod tests {
         let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = LenVal {
             key: String::from("lv/deadbeef"),
-            len: 10,
-            val: String::from("have a cup o' joe"),
+            len: 12,
+            val: String::from("deceased cow"),
         };
         let key = document.key.as_bytes();
         let result = dbase.put(&key, &document);
         assert!(result.is_ok());
+
+        let result = dbase.query("value");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].key.as_ref(), b"deceased cow");
+        assert_eq!(results[0].doc_id.as_ref(), b"lv/deadbeef");
+        assert_eq!(results[0].value.as_ref(), b"");
+
         let result = dbase.get::<LenVal>(&key);
         assert!(result.is_ok());
         let option = result.unwrap();
