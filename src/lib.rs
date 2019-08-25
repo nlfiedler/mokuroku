@@ -54,7 +54,7 @@ pub trait Document: Sized {
     fn to_bytes(&self) -> Result<Vec<u8>, Error>;
     ///
     /// Map a value to zero or more index key/value pairs, as passed to the
-    /// given `emit` function (first argument is the key, second is value).
+    /// given emitter instance.
     ///
     fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error>;
 }
@@ -62,7 +62,7 @@ pub trait Document: Sized {
 ///
 /// The application implements a function of this type and passes it to the
 /// database constructor. It will be called with the key and value for every
-/// record in the database and is expected to invoke the `Emit` function to
+/// record in the database and is expected to invoke the `emit` function to
 /// generate index values. This function is necessary for the building of an
 /// index where none exists. The library will read every record in the default
 /// column family, invoking this mapper with that data.
@@ -95,9 +95,9 @@ impl<'a> Emitter<'a> {
 
     ///
     /// Call this with an index key and value. The index key is _not_ required
-    /// to be unique, and the value can be in any format.
+    /// to be unique, and the optional value can be in any format.
     ///
-    pub fn emit(&self, ikey: &[u8], ivalue: &[u8]) -> Result<(), Error> {
+    pub fn emit(&self, ikey: &[u8], ivalue: Option<&[u8]>) -> Result<(), Error> {
         let ulid = Ulid::new().to_string();
         // to allow for duplicate keys emitted from the map function, add a
         // unique suffix to the index key
@@ -105,12 +105,15 @@ impl<'a> Emitter<'a> {
         uniq_key.extend_from_slice(&ikey[..]);
         uniq_key.push(b'-');
         uniq_key.extend_from_slice(&ulid.as_bytes());
-        // index value is the original document key and the given value,
-        // plus the length encoding for each (so we can separate them later)
-        let mut id_value: Vec<u8> = Vec::with_capacity(self.key.len() + ivalue.len() + SIZEOF_KEY);
+        // index value is the original document key and the given value, plus
+        // the length of the primary key so we can separate them later
+        let value_len = ivalue.map_or(0, |v| v.len());
+        let mut id_value: Vec<u8> = Vec::with_capacity(self.key.len() + value_len + SIZEOF_KEY);
         let _ = id_value.write((self.key.len() as u32).to_le_bytes().as_ref());
         let _ = id_value.write(self.key);
-        let _ = id_value.write(ivalue);
+        if let Some(value) = ivalue {
+            let _ = id_value.write(value);
+        }
         self.db.put_cf(*self.cf, &uniq_key, &id_value)?;
         Ok(())
     }
@@ -381,8 +384,7 @@ mod tests {
 
         fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error> {
             if view == "value" {
-                let empty: Vec<u8> = Vec::new();
-                emitter.emit(self.val.as_bytes(), &empty)?;
+                emitter.emit(self.val.as_bytes(), None)?;
             }
             Ok(())
         }
@@ -455,7 +457,7 @@ mod tests {
         fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error> {
             if view == "tags" {
                 for tag in &self.tags {
-                    emitter.emit(tag.as_bytes(), &self.location.as_bytes())?;
+                    emitter.emit(tag.as_bytes(), Some(&self.location.as_bytes()))?;
                 }
             }
             Ok(())
@@ -508,5 +510,85 @@ mod tests {
         assert!(tags.contains(&String::from("cat")));
         assert!(tags.contains(&String::from("black")));
         assert!(tags.contains(&String::from("tail")));
+    }
+
+    #[test]
+    fn no_view_creation() {
+        let db_path = "tmp/test/no_view_creation";
+        let _ = fs::remove_dir_all(db_path);
+        let mut views: Vec<String> = Vec::new();
+        views.push("tags".to_owned());
+        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let document = Asset {
+            // intentionally using a key that does not match anything in our mapper
+            key: String::from("none/cafebabe"),
+            location: String::from("hawaii"),
+            tags: vec![
+                String::from("cat"),
+                String::from("black"),
+                String::from("tail"),
+            ],
+        };
+        let key = document.key.as_bytes();
+        let result = dbase.put(&key, &document);
+        assert!(result.is_ok());
+        let result = dbase.query("tags");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn empty_view_name() {
+        let db_path = "tmp/test/empty_view_name";
+        let _ = fs::remove_dir_all(db_path);
+        let mut views: Vec<String> = Vec::new();
+        // intentionally passing an empty view name
+        views.push("".to_owned());
+        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let document = Asset {
+            key: String::from("as/cafebabe"),
+            location: String::from("hawaii"),
+            tags: vec![
+                String::from("cat"),
+                String::from("black"),
+                String::from("tail"),
+            ],
+        };
+        let key = document.key.as_bytes();
+        let result = dbase.put(&key, &document);
+        assert!(result.is_ok());
+        let result = dbase.query("");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn empty_view_list() {
+        let db_path = "tmp/test/empty_view_list";
+        let _ = fs::remove_dir_all(db_path);
+        let views: Vec<String> = Vec::new();
+        // intentionally passing an empty view list
+        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let document = Asset {
+            key: String::from("as/cafebabe"),
+            location: String::from("hawaii"),
+            tags: vec![
+                String::from("cat"),
+                String::from("black"),
+                String::from("tail"),
+            ],
+        };
+        let key = document.key.as_bytes();
+        let result = dbase.put(&key, &document);
+        assert!(result.is_ok());
+        let result = dbase.query("");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 0);
     }
 }

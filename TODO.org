@@ -69,22 +69,11 @@
 ****** if ID is not in the filter, then it is not deleted
 ***** prune index of stale entries on scan
 ***** view iterator could check bloom filter before returning results
-**** TODO probabaly emitted value should be an =Option= to make it easy to supply nothing
-**** TODO Tests to write
-***** TODO pass an empty set of views
-***** TODO pass a view name that is never used
-***** TODO pass an empty view name
-***** TODO query on an index for which nothing was ever emitted
 **** TODO Query an index with a single key
 ***** returns only results whose key matches the filter
 **** TODO Query an index with multiple keys
 ***** returns only results whose key matches each of the keys
 ***** results returned in the same order as the keys
-**** TODO Is there a clean way to define and pass the =emit= to the traits?
-***** how to streamline the =emit= function call
-****** our =emit= is defined as a local closure which is necessary
-****** a closure and a =Fn= are not compatible; this is probably impossible
-****** see section 19.3 of book on how to define the =Fn= type
 **** TODO Remove stale index entries on =delete()=
 **** TODO Clean up stale indices
 **** TODO Consider options for thread safe operations
