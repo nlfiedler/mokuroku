@@ -1,18 +1,46 @@
 //
 // Copyright (c) 2019 Nathan Fiedler
 //
-use failure::Error;
-use rocksdb::{DBIterator, IteratorMode, Options, DB};
+
+//! The secondary indices are built when `Database.query()` is called and the
+//! corresponding column family is missing. An application may then want to open
+//! the database and immediately call `query()` for every view. This will cause
+//! the index to be built based on the existing data. If for whatever reason the
+//! application deems it necessary to rebuild an index, that can be accomplished
+//! by calling the `rebuild()` function.
+//!
+//! The `Document.map()` functions are like redux.js reducers. Every view will
+//! eventually be passed to every implementation of `Document`, and it is up to
+//! the application to ignore views that are not relevant for the given document
+//! type.
+//!
+//! The reason for the `Document` and the `ByteMapper` is that we want to avoid
+//! any unnecessary deserialization when updating the secondary index. When
+//! putting a document in the database, there is no need to deserialize it, so
+//! the `map()` will be called immediately with every available view. However,
+//! in the case of a view being created from existing data, we must deserialize
+//! every single record in the database, and that is where the `ByteMapper`
+//! comes in -- it will recognize the key and/or value and perform the
+//! appropriate deserialization (likely using an implementation of `Document`)
+//! and invoke the provided `Emitter.emit()` with index values.
+
+use failure::{err_msg, Error};
+use rocksdb::{ColumnFamily, DBIterator, IteratorMode, Options, DB};
 use std::convert::TryInto;
+use std::fmt;
 use std::io::Write;
 use std::path::Path;
 use ulid::Ulid;
 
 ///
-/// `Document` defines the operations required for building the secondary index.
-/// Any data that should have an index should be represented by a type that
+/// `Document` defines a few operations required for building the index. Any
+/// data that should contribute to an index should be represented by a type that
 /// implements this trait, and be stored in the database using the `Database`
 /// wrapper method `put()`.
+///
+/// The primary reason for this trait is that when `put()` is called with an
+/// instance of `Document`, there is no need to deserialize the value when
+/// calling `map()`, since it is already in the natural format.
 ///
 pub trait Document: Sized {
     ///
@@ -25,64 +53,131 @@ pub trait Document: Sized {
     ///
     fn to_bytes(&self) -> Result<Vec<u8>, Error>;
     ///
-    /// Return the desired name of the secondary index. Queries can then be
-    /// run against the index using this name.
-    ///
-    fn view_name() -> String;
-    ///
     /// Map a value to zero or more index key/value pairs, as passed to the
     /// given `emit` function (first argument is the key, second is value).
     ///
-    fn map<P>(&self, emit: P)
-    where
-        P: Fn(&[u8], &[u8]) -> ();
+    fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error>;
+}
+
+///
+/// The application implements a function of this type and passes it to the
+/// database constructor. It will be called with the key and value for every
+/// record in the database and is expected to invoke the `Emit` function to
+/// generate index values. This function is necessary for the building of an
+/// index where none exists. The library will read every record in the default
+/// column family, invoking this mapper with that data.
+///
+/// The application could, for instance, use information in the key to determine
+/// how to deserialize the value, and then invoke the `map()` function on the
+/// appropriate `Document` implementation.
+///
+/// Arguments: key, value, view name, emitter
+///
+pub type ByteMapper = Box<dyn Fn(&[u8], &[u8], &str, &Emitter) -> Result<(), Error>>;
+
+///
+/// The `Emitter` receives index key/value pairs from the application.
+///
+pub struct Emitter<'a> {
+    /// RocksDB reference
+    db: &'a DB,
+    /// Document primary key
+    key: &'a [u8],
+    /// Column family for the index
+    cf: &'a ColumnFamily<'a>,
+}
+
+impl<'a> Emitter<'a> {
+    /// Construct an Emitter for processing the given key and view.
+    fn new(db: &'a DB, key: &'a [u8], cf: &'a ColumnFamily) -> Self {
+        Self { db, key, cf }
+    }
+
+    ///
+    /// Call this with an index key and value. The index key is _not_ required
+    /// to be unique, and the value can be in any format.
+    ///
+    pub fn emit(&self, ikey: &[u8], ivalue: &[u8]) -> Result<(), Error> {
+        let ulid = Ulid::new().to_string();
+        // to allow for duplicate keys emitted from the map function, add a
+        // unique suffix to the index key
+        let mut uniq_key: Vec<u8> = Vec::with_capacity(ikey.len() + KEY_SUFFIX_LEN);
+        uniq_key.extend_from_slice(&ikey[..]);
+        uniq_key.push(b'-');
+        uniq_key.extend_from_slice(&ulid.as_bytes());
+        // index value is the original document key and the given value,
+        // plus the length encoding for each (so we can separate them later)
+        let mut id_value: Vec<u8> = Vec::with_capacity(self.key.len() + ivalue.len() + SIZEOF_KEY);
+        let _ = id_value.write((self.key.len() as u32).to_le_bytes().as_ref());
+        let _ = id_value.write(self.key);
+        let _ = id_value.write(ivalue);
+        self.db.put_cf(*self.cf, &uniq_key, &id_value)?;
+        Ok(())
+    }
 }
 
 ///
 /// An instance of the database for reading and writing records to disk. This
 /// wrapper manages the secondary indices defined by the application.
 ///
+/// The secondary indices, referred to as "views", will be stored in RocksDB
+/// column families whose names are based on the names given in the constructor,
+/// with a prefix of `mrview-` to avoid conflicting with any column families
+/// managed by the application. The library will manage these column families as
+/// needed when (re)building the indices.
+///
+/// In addition to the names of the views, the application must provide a
+/// mapping function that works with key/value pairs as slices of bytes. This is
+/// called when building an index by reading every record in the database, in
+/// which the library does not have an inferred `Document` implementation to
+/// deserialize the record.
+///
 pub struct Database {
     /// RocksDB instance.
     db: DB,
+    /// Collection of index ("view") names.
+    views: Vec<String>,
+    /// Given a document key/value pair, emits index key/value pairs.
+    mapper: ByteMapper,
 }
 
-// Secondary indices are column families with our special prefix.
+// Secondary indices are column families with our special prefix. This prefix
+// resembles that used by PouchDB for its indices, but it also happens to be an
+// abbreviation of "mokuroku view", so it's all good.
 const VIEW_PREFIX: &str = "mrview-";
 // Key suffix is a dash and 26 character ULID hex string.
 const KEY_SUFFIX_LEN: usize = 27;
 // Maximum size in bytes of a record key for application data.
 const MAX_KEY_LEN: usize = 4_294_967_296;
-// Number of bytes used to represent the document key.
+// Number of bytes used to represent the length of the document key.
 const SIZEOF_KEY: usize = 4;
 
 impl Database {
     ///
     /// Create an instance of Database using the given path for storage.
     ///
-    /// The set of document instances will be used to define the secondary
-    /// indices; that is, their names will be used in naming the indices, and
-    /// their `map()` functions will be used to generate the index rows via the
-    /// provided `emit` function.
+    /// The set of view names are passed to the `Document.map()` whenever a
+    /// document is put into the database.
     ///
-    pub fn new<I, N>(db_path: &Path, views: I) -> Result<Self, Error>
+    /// The `ByteMapper` is responsible for deserializing any type of record and
+    /// emitting index key/value pairs appropriately.
+    ///
+    pub fn new<I, N>(db_path: &Path, views: I, mapper: ByteMapper) -> Result<Self, Error>
     where
         I: IntoIterator<Item = N>,
-        N: Document,
+        N: ToString,
     {
-        let myviews: Vec<String> = views
-            .into_iter()
-            .map(|_| {
-                let mut s = String::from(VIEW_PREFIX);
-                s.push_str(&N::view_name());
-                s
-            })
-            .collect();
+        let myviews: Vec<String> = views.into_iter().map(|ts| N::to_string(&ts)).collect();
         let mut db_opts = Options::default();
-        db_opts.create_missing_column_families(true);
         db_opts.create_if_missing(true);
-        let db = DB::open_cf(&db_opts, db_path, myviews)?;
-        Ok(Self { db })
+        // Do not create the missing column families now, otherwise it becomes
+        // difficult to know if we need to build the indices.
+        let db = DB::open(&db_opts, db_path)?;
+        Ok(Self {
+            db,
+            views: myviews,
+            mapper,
+        })
     }
 
     ///
@@ -102,26 +197,16 @@ impl Database {
         assert!(key.len() <= MAX_KEY_LEN, "key length must be under 4mb");
         let bytes = value.to_bytes()?;
         self.db.put(key, bytes)?;
-        let mut view_name = String::from(VIEW_PREFIX);
-        view_name.push_str(&D::view_name());
-        let cf = self.db.cf_handle(&view_name).unwrap();
-        let emit = |ikey: &[u8], ivalue: &[u8]| {
-            let ulid = Ulid::new().to_string();
-            // to allow for duplicate keys emitted from the map function, add a
-            // unique suffix to the index key
-            let mut uniq_key: Vec<u8> = Vec::with_capacity(ikey.len() + KEY_SUFFIX_LEN);
-            uniq_key.extend_from_slice(&ikey[..]);
-            uniq_key.push(b'-');
-            uniq_key.extend_from_slice(&ulid.as_bytes());
-            // index value is the original document key and the given value,
-            // plus the length encoding for each (so we can separate them later)
-            let mut id_value: Vec<u8> = Vec::with_capacity(key.len() + ivalue.len() + SIZEOF_KEY);
-            let _ = id_value.write((key.len() as u32).to_le_bytes().as_ref());
-            let _ = id_value.write(key);
-            let _ = id_value.write(ivalue);
-            let _ = self.db.put_cf(cf, &uniq_key, &id_value);
-        };
-        D::map(&value, emit);
+        // process every index on update
+        for view in &self.views {
+            let mut mrview = String::from(VIEW_PREFIX);
+            mrview.push_str(&view);
+            // only update the index if the column family exists
+            if let Some(cf) = self.db.cf_handle(&mrview) {
+                let emitter = Emitter::new(&self.db, key, &cf);
+                D::map(&value, &view, &emitter)?;
+            }
+        }
         Ok(())
     }
 
@@ -145,15 +230,51 @@ impl Database {
     }
 
     ///
-    /// Query on the given index, returning all results.
+    /// Query on the given index, returning all results. If the index has not
+    /// yet been built, it will be built prior to returning any results.
     ///
     pub fn query(&self, view: &str) -> Result<QueryIterator, Error> {
-        let mut view_name = String::from(VIEW_PREFIX);
-        view_name.push_str(view);
-        let cf = self.db.cf_handle(&view_name).unwrap();
+        let mut mrview = String::from(VIEW_PREFIX);
+        mrview.push_str(view);
+        // lazily build the index when it is queried
+        if self.db.cf_handle(&mrview).is_none() {
+            self.build(view, &mrview)?;
+        }
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing column familiy"))?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start)?;
         let qiter = QueryIterator::new(iter);
         Ok(qiter)
+    }
+
+    ///
+    /// Build the named index, replacing the index if it already exists. To
+    /// simply ensure that an index has been built, call `query()`, which will
+    /// not delete the existing index.
+    ///
+    pub fn rebuild(&self, view: &str) -> Result<(), Error> {
+        let mut mrview = String::from(VIEW_PREFIX);
+        mrview.push_str(view);
+        if let Some(_cf) = self.db.cf_handle(&mrview) {
+            self.db.drop_cf(&mrview)?;
+        }
+        self.build(view, &mrview)
+    }
+
+    ///
+    /// Build the named index now.
+    ///
+    fn build(&self, view: &str, mrview: &str) -> Result<(), Error> {
+        let opts = Options::default();
+        let cf = self.db.create_cf(&mrview, &opts)?;
+        let iter = self.db.iterator(IteratorMode::Start);
+        for (key, value) in iter {
+            let emitter = Emitter::new(&self.db, &key, &cf);
+            (*self.mapper)(&key, &value, view, &emitter)?;
+        }
+        Ok(())
     }
 }
 
@@ -219,6 +340,12 @@ impl<'a> Iterator for QueryIterator<'a> {
     }
 }
 
+impl<'a> fmt::Debug for QueryIterator<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "QueryIterator")
+    }
+}
+
 /// Read a u32 from the first four bytes of the slice.
 fn read_le_u32(input: &[u8]) -> u32 {
     let (int_bytes, _rest) = input.split_at(std::mem::size_of::<u32>());
@@ -246,17 +373,14 @@ mod tests {
             serde_result.key = str::from_utf8(key)?.to_owned();
             Ok(serde_result)
         }
+
         fn to_bytes(&self) -> Result<Vec<u8>, Error> {
             let encoded: Vec<u8> = serde_cbor::to_vec(self)?;
             Ok(encoded)
         }
-        fn view_name() -> String {
-            String::from("value")
-        }
-        fn map<P>(&self, _emit: P)
-        where
-            P: Fn(&[u8], &[u8]) -> (),
-        {
+
+        fn map(&self, _view: &str, _emitter: &Emitter) -> Result<(), Error> {
+            Ok(())
         }
     }
 
@@ -264,15 +388,11 @@ mod tests {
     fn put_get_delete() {
         let db_path = "tmp/test/put_get_delete";
         let _ = fs::remove_dir_all(db_path);
-        let mut views: Vec<LenVal> = Vec::new();
-        views.push(LenVal {
-            key: String::new(),
-            len: 0,
-            val: String::new(),
-        });
-        let dbase = Database::new(Path::new(db_path), views).unwrap();
+        let mut views: Vec<String> = Vec::new();
+        views.push("value".to_owned());
+        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = LenVal {
-            key: String::from("cafebabe"),
+            key: String::from("lv/deadbeef"),
             len: 10,
             val: String::from("have a cup o' joe"),
         };
@@ -312,36 +432,42 @@ mod tests {
             serde_result.key = str::from_utf8(key)?.to_owned();
             Ok(serde_result)
         }
+
         fn to_bytes(&self) -> Result<Vec<u8>, Error> {
             let encoded: Vec<u8> = serde_cbor::to_vec(self)?;
             Ok(encoded)
         }
-        fn view_name() -> String {
-            String::from("tags")
-        }
-        fn map<P>(&self, emit: P)
-        where
-            P: Fn(&[u8], &[u8]) -> (),
-        {
-            for tag in &self.tags {
-                emit(tag.as_bytes(), &self.location.as_bytes());
+
+        fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error> {
+            if view == "tags" {
+                for tag in &self.tags {
+                    emitter.emit(tag.as_bytes(), &self.location.as_bytes())?;
+                }
             }
+            Ok(())
         }
+    }
+
+    fn mapper(key: &[u8], value: &[u8], view: &str, emitter: &Emitter) -> Result<(), Error> {
+        if &key[..3] == b"lv/".as_ref() {
+            let doc = LenVal::from_bytes(key, value)?;
+            doc.map(view, emitter)?;
+        } else if &key[..3] == b"as/".as_ref() {
+            let doc = Asset::from_bytes(key, value)?;
+            doc.map(view, emitter)?;
+        }
+        Ok(())
     }
 
     #[test]
     fn asset_view_creation() {
         let db_path = "tmp/test/asset_view_creation";
         let _ = fs::remove_dir_all(db_path);
-        let mut views: Vec<Asset> = Vec::new();
-        views.push(Asset {
-            key: String::new(),
-            location: String::new(),
-            tags: Vec::new(),
-        });
-        let dbase = Database::new(Path::new(db_path), views).unwrap();
+        let mut views: Vec<String> = Vec::new();
+        views.push("tags".to_owned());
+        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
-            key: String::from("cafebabe"),
+            key: String::from("as/cafebabe"),
             location: String::from("hawaii"),
             tags: vec![
                 String::from("cat"),
@@ -356,13 +482,15 @@ mod tests {
         assert!(result.is_ok());
         let iter = result.unwrap();
         let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 3);
         // ensure the document "id", index keys, and value are correct
-        assert!(results.iter().all(|r| r.doc_id.as_ref() == b"cafebabe"));
+        assert!(results.iter().all(|r| r.doc_id.as_ref() == b"as/cafebabe"));
         assert!(results.iter().all(|r| r.value.as_ref() == b"hawaii"));
         let tags: Vec<String> = results
             .iter()
             .map(|r| str::from_utf8(&r.key).unwrap().to_owned())
             .collect();
+        assert_eq!(tags.len(), 3);
         assert!(tags.contains(&String::from("cat")));
         assert!(tags.contains(&String::from("black")));
         assert!(tags.contains(&String::from("tail")));

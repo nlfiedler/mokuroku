@@ -7,6 +7,8 @@
 **** Query on the index with or without keys for filtering the results
 **** Functions to build the index as needed, such as for existing data
 *** Data Model
+**** Database keys and values are defined by the application
+***** i.e. library does not dictate any particular format or key prefix
 **** Indices are named (e.g. "etags") by the application
 **** Index key consists of a prefix from the app plus a unique suffix
 ***** Because the app may output non-unique values, the key must be made unique
@@ -19,7 +21,6 @@
 ***** e.g. ~count~ would result in key from map output and value from reduce output
 ***** e.g. [('foo', 12), ('bar', 4), ('quux', 101)]
 **** Indices must be namespaced to avoid collision with application data
-***** PouchDB creates a separate LevelDB instance with =mrview= in the name
 ***** RocksDB supports column families for this purpose
 **** Querying index employs the RocksDB key prefix iterator
 ***** Consequently the query operation returns an iterator
@@ -34,7 +35,7 @@
 ***** c.f. https://github.com/facebook/rocksdb/wiki/Column-Families
 ** Implementation
 *** Indices are stored in separate column families
-**** Need consists of our special prefix (e.g. =mrview=) and the index name
+**** Name consists of our special prefix (e.g. =mrview=) and the index name
 **** Each registered index has an associated column family handle
 *** Row deletions must update the appropriate index!
 *** API Details
@@ -58,7 +59,7 @@
 ***** Called by the application in an ad hoc fashion
 ***** Delete any column families with our prefix that do not match any registered view
 *** Development
-**** DONE Define the library API
+**** DONE Initial attempt to define the library API
 ***** library function: =emit=
 ****** receives the bytes for the index key (prefix)
 ****** receives the bytes for the index value
@@ -70,10 +71,6 @@
 ****** library will invoke =map= and =to_bytes= before writing to the database
 ****** library will write key as-is and output of =to_bytes= as the value
 ****** library will write index entries corresponding to the values emitted
-***** define a trait that has the functions needed to implement a "view"
-****** app implements this trait for all its types stored in the database
-****** c.f. Rust book chapter 17
-****** i.e. use generics to parameterize the index structures
 ***** trait function: =map=
 ****** invokes an =emit= function received as a parameter
 ****** each emitted value is stored as a separate key/value in the index
@@ -84,10 +81,7 @@
 ****** this is for the application data, not the index
 ****** converts a vector of bytes (as read from RocksDB) into the data type
 ****** called by the library when (re)building the index with existing data
-***** trait function: =should_map=
-****** returns true if the record key/value is of interest to this view
-****** receives the key/value as bytes, application must decide if matches
-****** called by the library when (re)building the index with existing data
+****** may return a special error if trait does not serialize this value
 **** DONE Consider how =delete= will update the indices
 ***** this could be what PouchDB refers to as ~stale~ results
 ***** how to detect stale results?
@@ -121,32 +115,52 @@
 ***** strip the unique suffix from the index key
 **** DONE Serialized index value must include the primary key
 **** DONE Query iterator must split document key off of index value
-**** TODO =map()= should be invoked for all registered views on =put()=
-**** TODO How should library invoke =map= on every kind of document?
-***** Using =&Self= in =map()= is the same as =&self= so not really generic
-**** TODO Is there a clean way to define and pass the =emit= to the traits?
-**** TODO How to deal with errors in the =put()= index building?
-***** TODO getting the cf handle can return =None=
-***** TODO invoking =put_cf()= may result in an error
+**** DONE Define the API for the library
+***** application provides a =Fn= to produce index pairs for any record
+****** passed to =Database= constructor
+****** is given the key/value pair and an =Emitter=
+****** called when building an index
+***** a set of view names are registered at startup
+***** document trait =map()= receives a =view_name= argument
+****** trait will call =emit= if it has something for that view
+****** every trait impl gets a chance to emit for every view
+****** sort of like PouchDB, just less dynamic
+***** in this way, the trait is like a redux reducer
+****** every view name passes through every trait's =map()= function
+****** only relevant traits will emit anything for the view
+***** how to build a single index
+****** delete the existing column family, if any, to remove stale entries
+****** library reads all records, invokes provided =ByteMapper= function
+***** how to define the =view= type to avoid stringly typing, string comparison
+****** forget it, just use string for the view name
+**** DONE Consider how and when the index will be built
+***** do not automatically create the column families on startup
+***** upon query, if column family is missing, build the index
+***** in =put()=, invoke =map()= with every view for which column family already exists
 **** TODO Write test with =put=, =get=, =delete=, =get=, =delete= with index to ensure same behavior as w/o index
-**** TODO Build missing index when first queried
-***** how to tell that the index has not been built?
-***** read each record in the database
-***** invoke =match= for the defined trait to know if this record is handled by this trait
-****** receives the key and value from the database
-****** e.g. trait would look at the key prefix or attempt to deserialize
-***** invoke =deserialized= for the matching trait
-***** invoke =map= for the matching trait
-***** write the emitted index key/value pairs
+**** TODO Write a test where =emit= is given an empty index value
+**** TODO Tests to write
+***** TODO pass an empty set of views
+***** TODO pass a view name that is never used
+***** TODO pass an empty view name
+***** TODO query on an index for which nothing was ever emitted
 **** TODO Query an index with a single key
 ***** returns only results whose key matches the filter
 **** TODO Query an index with multiple keys
 ***** returns only results whose key matches each of the keys
 ***** results returned in the same order as the keys
-**** TODO Function to build an index immediately
+**** TODO Is there a clean way to define and pass the =emit= to the traits?
+***** how to streamline the =emit= function call
+****** our =emit= is defined as a local closure which is necessary
+****** a closure and a =Fn= are not compatible; this is probably impossible
+****** see section 19.3 of book on how to define the =Fn= type
+**** TODO Remove stale index entries on =delete()=
 **** TODO Clean up stale indices
 **** TODO Consider options for thread safe operations
 *** Publishing
+**** TODO Write a guide on how to use properly
+***** Define views at time of DB open
+***** Prime the indices at startup to improve response time
 **** TODO Start a changelog
 **** TODO Write API documentation at the module level
 ***** assumes we already wrote function-level documentation
