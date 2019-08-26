@@ -17,12 +17,12 @@
 //! The reason for the `Document` and the `ByteMapper` is that we want to avoid
 //! any unnecessary deserialization when updating the secondary index. When
 //! putting a document in the database, there is no need to deserialize it, so
-//! the `map()` will be called immediately with every available view. However,
-//! in the case of a view being created from existing data, we must deserialize
-//! every single record in the database, and that is where the `ByteMapper`
-//! comes in -- it will recognize the key and/or value and perform the
-//! appropriate deserialization (likely using an implementation of `Document`)
-//! and invoke the provided `Emitter.emit()` with index values.
+//! the `map()` will be called on the `Document` instance with every available
+//! view. However, in the case of a view being created from existing data, we
+//! must deserialize every record in the database, and that is where the
+//! `ByteMapper` comes in -- it will recognize the key and/or value and perform
+//! the appropriate deserialization (likely using an implementation of
+//! `Document`) and invoke the provided `Emitter.emit()` with index values.
 
 use failure::{err_msg, Error};
 use rocksdb::{ColumnFamily, DBIterator, IteratorMode, Options, DB};
@@ -252,6 +252,22 @@ impl Database {
         Ok(qiter)
     }
 
+    pub fn query_by_key(&self, view: &str, key: &[u8]) -> Result<QueryIterator, Error> {
+        let mut mrview = String::from(VIEW_PREFIX);
+        mrview.push_str(view);
+        // lazily build the index when it is queried
+        if self.db.cf_handle(&mrview).is_none() {
+            self.build(view, &mrview)?;
+        }
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing column familiy"))?;
+        let iter = self.db.prefix_iterator_cf(cf, key)?;
+        let qiter = QueryIterator::new_prefix(iter, key);
+        Ok(qiter)
+    }
+
     ///
     /// Build the named index, replacing the index if it already exists. To
     /// simply ensure that an index has been built, call `query()`, which will
@@ -307,12 +323,26 @@ impl QueryResult {
 pub struct QueryIterator<'a> {
     /// Reference to Database for fetching records.
     dbiter: DBIterator<'a>,
+    /// Key prefix to filter results, if any.
+    prefix: Option<Vec<u8>>,
 }
 
 impl<'a> QueryIterator<'a> {
     /// Construct a new QueryIterator from the DBIterator.
     fn new(dbiter: DBIterator<'a>) -> Self {
-        Self { dbiter }
+        Self {
+            dbiter,
+            prefix: None,
+        }
+    }
+
+    /// Construct a new QueryIterator that only returns results whose key
+    /// matches the given prefix.
+    fn new_prefix(dbiter: DBIterator<'a>, prefix: &[u8]) -> Self {
+        Self {
+            dbiter,
+            prefix: Some(prefix.to_owned()),
+        }
     }
 }
 
@@ -321,6 +351,16 @@ impl<'a> Iterator for QueryIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some((key, value)) = self.dbiter.next() {
+            if let Some(prefix) = &self.prefix {
+                // enforce the primary key matching the given prefix
+                if key.len() < prefix.len() {
+                    return None;
+                }
+                let pre_key = &key[..prefix.len()];
+                if pre_key != &prefix[..] {
+                    return None;
+                }
+            }
             // remove the dash and ULID suffix from the index key
             let end = key.len() - KEY_SUFFIX_LEN;
             let mut short_key: Vec<u8> = Vec::with_capacity(end);
@@ -590,5 +630,94 @@ mod tests {
         let iter = result.unwrap();
         let results: Vec<QueryResult> = iter.collect();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn query_by_key() {
+        let db_path = "tmp/test/query_by_key";
+        let _ = fs::remove_dir_all(db_path);
+        let mut views: Vec<String> = Vec::new();
+        views.push("tags".to_owned());
+        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let documents = [
+            Asset {
+                key: String::from("as/cafebabe"),
+                location: String::from("hawaii"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("black"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/cafed00d"),
+                location: String::from("taiwan"),
+                tags: vec![
+                    String::from("dog"),
+                    String::from("black"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
+                key: String::from("as/1badb002"),
+                location: String::from("hakone"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("ears"),
+                ],
+            },
+            Asset {
+                key: String::from("as/baadf00d"),
+                location: String::from("dublin"),
+                tags: vec![
+                    String::from("mouse"),
+                    String::from("white"),
+                    String::from("tail"),
+                ],
+            },
+        ];
+        for document in documents.iter() {
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, document);
+            assert!(result.is_ok());
+        }
+
+        // querying all tags should return 12
+        let result = dbase.query("tags");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 12);
+
+        // querying by a specific tag: cat
+        let result = dbase.query_by_key("tags", b"cat");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.key.as_ref() == b"cat"));
+        let keys: Vec<String> = results
+            .iter()
+            .map(|r| str::from_utf8(&r.doc_id).unwrap().to_owned())
+            .collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&String::from("as/cafebabe")));
+        assert!(keys.contains(&String::from("as/1badb002")));
+
+        // querying by a specific tag: white
+        let result = dbase.query_by_key("tags", b"white");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.key.as_ref() == b"white"));
+        let keys: Vec<String> = results
+            .iter()
+            .map(|r| str::from_utf8(&r.doc_id).unwrap().to_owned())
+            .collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&String::from("as/baadf00d")));
+        assert!(keys.contains(&String::from("as/1badb002")));
     }
 }

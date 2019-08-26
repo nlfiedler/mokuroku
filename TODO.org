@@ -60,17 +60,19 @@
 ***** Delete any column families with our prefix that do not match any registered view
 *** Development
 **** DONE Consider how =delete= will update the indices
-***** this could be what PouchDB refers to as ~stale~ results
-***** how to detect stale results?
-***** are stale results returned in the scan?
-***** would we eagerly remove the stale results?
-***** a bloom filter of deleted entries
-****** store in the database, probabaly
-****** if ID is not in the filter, then it is not deleted
-***** prune index of stale entries on scan
-***** view iterator could check bloom filter before returning results
-**** TODO Query an index with a single key
+***** investigate how PouchDB deals with this
+****** this could be what PouchDB refers to as ~stale~ results
+****** how to detect stale results?
+****** are stale results returned in the scan?
+***** how to implement record deletion
+****** on =delete()= save the primary key in the ~mrview--deleted~ cf
+****** maintain a bloom filter of deleted primary keys
+****** on startup, scan ~mrview--deleted~ to get prime the bloom filter
+****** on =query()=, find and remove stale entries for all views, clear deleted rows
+****** on =put()= check if key was in deleted set, if so remove ~mrview--deleted~ row
+**** DONE Query an index with a single key
 ***** returns only results whose key matches the filter
+**** TODO Replace all key and value args from =&[u8]= to generic types that implement =AsRef<[u8]>=
 **** TODO Query an index with multiple keys
 ***** returns only results whose key matches each of the keys
 ***** results returned in the same order as the keys
