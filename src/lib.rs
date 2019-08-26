@@ -251,32 +251,21 @@ impl Database {
     /// yet been built, it will be built prior to returning any results.
     ///
     pub fn query(&self, view: &str) -> Result<QueryIterator, Error> {
-        let mut mrview = String::from(VIEW_PREFIX);
-        mrview.push_str(view);
-        // lazily build the index when it is queried
-        if self.db.cf_handle(&mrview).is_none() {
-            self.build(view, &mrview)?;
-        }
-        let cf = self
-            .db
-            .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing column familiy"))?;
+        let cf = self.ensure_view_built(view)?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start)?;
         let qiter = QueryIterator::new(iter);
         Ok(qiter)
     }
 
+    ///
+    /// Query on the given index, returning those results whose key prefix
+    /// matches the value given. Only those index keys with a matching prefix
+    /// will be returned.
+    ///
+    /// As with `query()`, if the index has not yet been built, it will be.
+    ///
     pub fn query_by_key<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<QueryIterator, Error> {
-        let mut mrview = String::from(VIEW_PREFIX);
-        mrview.push_str(view);
-        // lazily build the index when it is queried
-        if self.db.cf_handle(&mrview).is_none() {
-            self.build(view, &mrview)?;
-        }
-        let cf = self
-            .db
-            .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing column familiy"))?;
+        let cf = self.ensure_view_built(view)?;
         let iter = self.db.prefix_iterator_cf(cf, key.as_ref())?;
         let qiter = QueryIterator::new_prefix(iter, key.as_ref());
         Ok(qiter)
@@ -294,6 +283,21 @@ impl Database {
             self.db.drop_cf(&mrview)?;
         }
         self.build(view, &mrview)
+    }
+
+    ///
+    /// Ensure the column family for the named view has been built.
+    ///
+    fn ensure_view_built(&self, view: &str) -> Result<ColumnFamily, Error> {
+        let mut mrview = String::from(VIEW_PREFIX);
+        mrview.push_str(view);
+        // lazily build the index when it is queried
+        if self.db.cf_handle(&mrview).is_none() {
+            self.build(view, &mrview)?;
+        }
+        self.db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing column familiy"))
     }
 
     ///
