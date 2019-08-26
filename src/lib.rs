@@ -97,22 +97,25 @@ impl<'a> Emitter<'a> {
     /// Call this with an index key and value. The index key is _not_ required
     /// to be unique, and the optional value can be in any format.
     ///
-    pub fn emit(&self, ikey: &[u8], ivalue: Option<&[u8]>) -> Result<(), Error> {
+    pub fn emit<B>(&self, ikey: B, ivalue: Option<B>) -> Result<(), Error>
+    where
+        B: AsRef<[u8]>,
+    {
         let ulid = Ulid::new().to_string();
         // to allow for duplicate keys emitted from the map function, add a
         // unique suffix to the index key
-        let mut uniq_key: Vec<u8> = Vec::with_capacity(ikey.len() + KEY_SUFFIX_LEN);
-        uniq_key.extend_from_slice(&ikey[..]);
+        let mut uniq_key: Vec<u8> = Vec::with_capacity(ikey.as_ref().len() + KEY_SUFFIX_LEN);
+        uniq_key.extend_from_slice(&ikey.as_ref()[..]);
         uniq_key.push(b'-');
         uniq_key.extend_from_slice(&ulid.as_bytes());
         // index value is the original document key and the given value, plus
         // the length of the primary key so we can separate them later
-        let value_len = ivalue.map_or(0, |v| v.len());
+        let value_len = ivalue.as_ref().map_or(0, |v| v.as_ref().len());
         let mut id_value: Vec<u8> = Vec::with_capacity(self.key.len() + value_len + SIZEOF_KEY);
         let _ = id_value.write((self.key.len() as u32).to_le_bytes().as_ref());
         let _ = id_value.write(self.key);
-        if let Some(value) = ivalue {
-            let _ = id_value.write(value);
+        if let Some(value) = ivalue.as_ref() {
+            let _ = id_value.write(value.as_ref());
         }
         self.db.put_cf(*self.cf, &uniq_key, &id_value)?;
         Ok(())
@@ -196,17 +199,24 @@ impl Database {
     ///
     /// Put the key/value pair into the database.
     ///
-    pub fn put<D: Document>(&self, key: &[u8], value: &D) -> Result<(), Error> {
-        assert!(key.len() <= MAX_KEY_LEN, "key length must be under 4mb");
+    pub fn put<D, K>(&self, key: K, value: &D) -> Result<(), Error>
+    where
+        D: Document,
+        K: AsRef<[u8]>,
+    {
+        assert!(
+            key.as_ref().len() <= MAX_KEY_LEN,
+            "key length must be under 4mb"
+        );
         let bytes = value.to_bytes()?;
-        self.db.put(key, bytes)?;
+        self.db.put(key.as_ref(), bytes)?;
         // process every index on update
         for view in &self.views {
             let mut mrview = String::from(VIEW_PREFIX);
             mrview.push_str(&view);
             // only update the index if the column family exists
             if let Some(cf) = self.db.cf_handle(&mrview) {
-                let emitter = Emitter::new(&self.db, key, &cf);
+                let emitter = Emitter::new(&self.db, key.as_ref(), &cf);
                 D::map(&value, &view, &emitter)?;
             }
         }
@@ -216,10 +226,14 @@ impl Database {
     ///
     /// Retrieve the value with the given key.
     ///
-    pub fn get<D: Document>(&self, key: &[u8]) -> Result<Option<D>, Error> {
-        let result = self.db.get(key)?;
+    pub fn get<D, K>(&self, key: K) -> Result<Option<D>, Error>
+    where
+        D: Document,
+        K: AsRef<[u8]>,
+    {
+        let result = self.db.get(key.as_ref())?;
         match result {
-            Some(v) => Ok(Some(D::from_bytes(key, &v)?)),
+            Some(v) => Ok(Some(D::from_bytes(key.as_ref(), &v)?)),
             None => Ok(None),
         }
     }
@@ -227,8 +241,8 @@ impl Database {
     ///
     /// Delete the database record associated with the given key.
     ///
-    pub fn delete(&self, key: &[u8]) -> Result<(), Error> {
-        self.db.delete(key)?;
+    pub fn delete<K: AsRef<[u8]>>(&self, key: K) -> Result<(), Error> {
+        self.db.delete(key.as_ref())?;
         Ok(())
     }
 
@@ -252,7 +266,7 @@ impl Database {
         Ok(qiter)
     }
 
-    pub fn query_by_key(&self, view: &str, key: &[u8]) -> Result<QueryIterator, Error> {
+    pub fn query_by_key<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<QueryIterator, Error> {
         let mut mrview = String::from(VIEW_PREFIX);
         mrview.push_str(view);
         // lazily build the index when it is queried
@@ -263,8 +277,8 @@ impl Database {
             .db
             .cf_handle(&mrview)
             .ok_or_else(|| err_msg("missing column familiy"))?;
-        let iter = self.db.prefix_iterator_cf(cf, key)?;
-        let qiter = QueryIterator::new_prefix(iter, key);
+        let iter = self.db.prefix_iterator_cf(cf, key.as_ref())?;
+        let qiter = QueryIterator::new_prefix(iter, key.as_ref());
         Ok(qiter)
     }
 
@@ -455,7 +469,7 @@ mod tests {
         assert_eq!(results[0].doc_id.as_ref(), b"lv/deadbeef");
         assert_eq!(results[0].value.as_ref(), b"");
 
-        let result = dbase.get::<LenVal>(&key);
+        let result: Result<Option<LenVal>, Error> = dbase.get(&key);
         assert!(result.is_ok());
         let option = result.unwrap();
         assert!(option.is_some());
@@ -465,7 +479,7 @@ mod tests {
         assert_eq!(document.val, actual.val);
         let result = dbase.delete(&key);
         assert!(result.is_ok());
-        let result = dbase.get::<LenVal>(&key);
+        let result: Result<Option<LenVal>, Error> = dbase.get(&key);
         assert!(result.is_ok());
         let option = result.unwrap();
         assert!(option.is_none());
