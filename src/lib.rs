@@ -2,9 +2,14 @@
 // Copyright (c) 2019 Nathan Fiedler
 //
 
+//! Create an instance of `Database`, much like you would with `rocksdb::DB`.
+//! Provide the path to the database files, the set of view names to maintain,
+//! and a `ByteMapper` that will assit in building indices from existing data.
+//! See the README and `examples` directory for examples.
+//!
 //! The secondary indices are built when `Database.query()` is called and the
 //! corresponding column family is missing. An application may then want to open
-//! the database and immediately call `query()` for every view. This will cause
+//! the database and subsequently call `query()` for every view. This will cause
 //! the index to be built based on the existing data. If for whatever reason the
 //! application deems it necessary to rebuild an index, that can be accomplished
 //! by calling the `rebuild()` function.
@@ -19,10 +24,15 @@
 //! putting a document in the database, there is no need to deserialize it, so
 //! the `map()` will be called on the `Document` instance with every available
 //! view. However, in the case of a view being created from existing data, we
-//! must deserialize every record in the database, and that is where the
-//! `ByteMapper` comes in -- it will recognize the key and/or value and perform
-//! the appropriate deserialization (likely using an implementation of
-//! `Document`) and invoke the provided `Emitter.emit()` with index values.
+//! must deserialize every record in the default column family, and that is
+//! where the `ByteMapper` comes in -- it will recognize the key and/or value
+//! and perform the appropriate deserialization (likely using an implementation
+//! of `Document`) and invoke the provided `Emitter` with index values.
+//!
+//! **N.B.** _Presently any delete or update that would affect an index is not
+//! correctly accounted for. That will be addressed in a future release. In the
+//! mean time, you can forcibly rebuild an index by calling `rebuild()` on the
+//! `Database` instance._
 
 use failure::{err_msg, Error};
 use rocksdb::{ColumnFamily, DBIterator, IteratorMode, Options, DB};
@@ -40,7 +50,7 @@ use ulid::Ulid;
 ///
 /// The primary reason for this trait is that when `put()` is called with an
 /// instance of `Document`, there is no need to deserialize the value when
-/// calling `map()`, since it is already in the natural format.
+/// calling `map()`, since it is already in its natural format.
 ///
 pub trait Document: Sized {
     ///
@@ -62,16 +72,16 @@ pub trait Document: Sized {
 ///
 /// The application implements a function of this type and passes it to the
 /// database constructor. It will be called with the key and value for every
-/// record in the database and is expected to invoke the `emit` function to
-/// generate index values. This function is necessary for the building of an
-/// index where none exists. The library will read every record in the default
-/// column family, invoking this mapper with that data.
+/// record in the database and is expected to invoke the `Emitter` to generate
+/// index values. This function is necessary for the building of an index where
+/// none exists. The library will read every record in the default column
+/// family, invoking this mapper with that data.
 ///
 /// The application could, for instance, use information in the key to determine
-/// how to deserialize the value, and then invoke the `map()` function on the
-/// appropriate `Document` implementation.
+/// how to deserialize the value into a `Document`, and then invoke the `map()`
+/// function on that `Document`.
 ///
-/// Arguments: key, value, view name, emitter
+/// Arguments: database key, database value, view name, emitter
 ///
 pub type ByteMapper = Box<dyn Fn(&[u8], &[u8], &str, &Emitter) -> Result<(), Error>>;
 
@@ -163,10 +173,12 @@ impl Database {
     /// Create an instance of Database using the given path for storage.
     ///
     /// The set of view names are passed to the `Document.map()` whenever a
-    /// document is put into the database.
+    /// document is put into the database. That is, these are the names of the
+    /// indices that will be updated whenever a document is stored.
     ///
     /// The `ByteMapper` is responsible for deserializing any type of record and
-    /// emitting index key/value pairs appropriately.
+    /// emitting index key/value pairs appropriately. It will be invoked when
+    /// (re)building an index from existing data.
     ///
     pub fn new<I, N>(db_path: &Path, views: I, mapper: ByteMapper) -> Result<Self, Error>
     where
@@ -197,7 +209,12 @@ impl Database {
     }
 
     ///
-    /// Put the key/value pair into the database.
+    /// Put the key/value pair into the database, ensuring all indices are
+    /// updated, if they have been built.
+    ///
+    /// _N.B. If updating a document results in previous index values being
+    /// outdated, the index will be out of sync. This will be addressed in a
+    /// future release._
     ///
     pub fn put<D, K>(&self, key: K, value: &D) -> Result<(), Error>
     where
@@ -240,6 +257,9 @@ impl Database {
 
     ///
     /// Delete the database record associated with the given key.
+    ///
+    /// _N.B. This does not yet update the secondary indices.  This will be
+    /// addressed in a future release._
     ///
     pub fn delete<K: AsRef<[u8]>>(&self, key: K) -> Result<(), Error> {
         self.db.delete(key.as_ref())?;
@@ -329,6 +349,7 @@ pub struct QueryResult {
 }
 
 impl QueryResult {
+    /// Construct a QueryResult based on index row values.
     fn new(key: Box<[u8]>, value: Box<[u8]>, doc_id: Box<[u8]>) -> Self {
         Self { key, value, doc_id }
     }
@@ -707,6 +728,13 @@ mod tests {
         let iter = result.unwrap();
         let results: Vec<QueryResult> = iter.collect();
         assert_eq!(results.len(), 12);
+
+        // querying by a specific tag: noman
+        let result = dbase.query_by_key("tags", b"noman");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 0);
 
         // querying by a specific tag: cat
         let result = dbase.query_by_key("tags", b"cat");

@@ -1,99 +1,56 @@
 * mokuroku
-** Design
-*** Usage
-**** Client creates the =RocksDB= instance, passes to index functions
-**** All operations must go through index functions (put, delete, etc)
-**** Register view definitions to provide index keys and values
-**** Query on the index with or without keys for filtering the results
-**** Functions to build the index as needed, such as for existing data
-*** Data Model
-**** Database keys and values are defined by the application
-***** i.e. library does not dictate any particular format or key prefix
-**** Indices are named (e.g. "etags") by the application
-**** Index key consists of a prefix from the app plus a unique suffix
-***** Because the app may output non-unique values, the key must be made unique
-***** Suffix needs to be sufficiently unique even if many records are written in a short time
-**** App outputs additional data as the value for the index row
-***** Application provides a mapping function to provide index keys and values
-***** In addition to the key, the mapping function also emits other data
-***** A single invocation of the mapping function may emit multiple rows of data
-**** Specifying a ~reduce~ function means index rows consist of key and value is reduce output
-***** e.g. ~count~ would result in key from map output and value from reduce output
-***** e.g. [('foo', 12), ('bar', 4), ('quux', 101)]
-**** Indices must be namespaced to avoid collision with application data
-***** RocksDB supports column families for this purpose
-**** Querying index employs the RocksDB key prefix iterator
-***** Consequently the query operation returns an iterator
-***** Results returned are the data from the mapping function
-***** RocksDB can quickly scan to a key prefix to start iterating
-**** When querying mulitple keys, results are returned in the given key order
-*** References
-**** https://misfra.me/2017/01/18/how-to-implement-secondary-indexes/
-***** index key is the information you're searching for, value is the original key
-***** important to keep the keys unique and canonically formed
-**** RocksDB FAQ seems to suggest using column families for different "key spaces"
-***** c.f. https://github.com/facebook/rocksdb/wiki/Column-Families
 ** Implementation
-*** Indices are stored in separate column families
-**** Name consists of our special prefix (e.g. =mrview=) and the index name
-**** Each registered index has an associated column family handle
-*** Row deletions must update the appropriate index!
-*** API Details
-**** Create index
-***** operation should be idempotent
-**** Delete index
-***** remove the registered view functions
-***** remove the corresponding column family
-**** List indices
-**** Query index
-***** returns an iterator to return the results as needed
-***** results are the output from the app mapping function
-***** rows are returned in the same order as the supplied keys array
-***** optional keys value to set start/end of results range
-***** optional number of rows to skip
-***** optional number of rows to limit
-**** Build index
-***** As a means of constructing the index with existing data
-***** Maybe the data was modified externally, for example
-**** Index cleanup
+*** Development
+**** TODO Read papers on secondary index strategies
+***** c.f. http://dblab.cs.ucr.edu/projects/KeyValueIndexes/
+***** current impl is akin to "lazy" updates on a stand-alone index
+****** index is stored separately from data (column family)
+****** appends new index rows on write
+****** merges index rows on query
+***** based on the Efficient Secondary Attribute Lookup in NoSQL Databases paper
+****** the secondary index with lazy updates performs pretty well in most cases
+****** their embedded index requires modifying LevelDB internal structures
+**** TODO Update stale index entries on =put()=
+***** storing a new version of a document may affect the indices
+***** maybe store primary key in ~mrview--updated~ cf with timestamp value
+***** on query, perform "read repair" of updated entries based on timestamp
+**** TODO Remove stale index entries on =delete()=
+***** Cassandra does a "read repair" which prunes stale entries on query
+***** Diff-Index paper adds index updates to a queue, processes in background
+***** some discussions use the term "tombstone" when marking something outdated
+***** on =delete()= save the primary key in the ~mrview--deleted~ cf
+***** maintain a bloom/cuckoo filter of deleted primary keys
+****** https://github.com/seiflotfy/rust-cuckoofilter
+****** https://github.com/nervosnetwork/bloom-filters
+****** https://github.com/sagalasan/bloom-filter
+***** on startup, scan ~mrview--deleted~ to get prime the bloom filter
+***** on =query()=, find and remove stale entries for all views, clear deleted rows
+***** on =put()= check if key was in deleted set, if so remove ~mrview--deleted~ row
+**** TODO Add function to delete an index
+***** remove corresponding entry from =views= list
+**** TODO Clean up stale indices
 ***** Called by the application in an ad hoc fashion
 ***** Delete any column families with our prefix that do not match any registered view
-*** Development
-**** DONE Consider how =delete= will update the indices
-***** investigate how PouchDB deals with this
-****** this could be what PouchDB refers to as ~stale~ results
-****** how to detect stale results?
-****** are stale results returned in the scan?
-***** how to implement record deletion
-****** on =delete()= save the primary key in the ~mrview--deleted~ cf
-****** maintain a bloom filter of deleted primary keys
-****** on startup, scan ~mrview--deleted~ to get prime the bloom filter
-****** on =query()=, find and remove stale entries for all views, clear deleted rows
-****** on =put()= check if key was in deleted set, if so remove ~mrview--deleted~ row
-**** DONE Query an index with a single key
-***** returns only results whose key matches the filter
-**** DONE Replace all key and value args from =&[u8]= to generic types that implement =AsRef<[u8]>=
-**** TODO Query an index with multiple keys
-***** returns only results whose key matches each of the keys
-***** results returned in the same order as the keys
-**** TODO Remove stale index entries on =delete()=
-**** TODO Clean up stale indices
+**** TODO Support the =rocksdb::WriteBatch= atomic commit feature
+**** TODO Support query with start and end key values/prefixes
+**** TODO Support query options to skip some number of results, limit to some number
 **** TODO Consider options for thread safe operations
 *** Publishing
-**** TODO Write a guide on how to use properly
+**** DONE Write a guide on how to use properly
 ***** Define views at time of DB open
 ***** Prime the indices at startup to improve response time
 **** TODO Start a changelog
-**** TODO Write API documentation at the module level
+**** DONE Write API documentation at the module level
 ***** assumes we already wrote function-level documentation
-**** TODO Write a quick example for the =README.md=
-**** TODO Write a simple example crate in =examples= directory
+**** DONE Write a quick example for the =README.md=
+**** DONE Write a simple example crate in =examples= directory
 **** DONE Populate =Cargo.toml= with useful meta information
-**** TODO Push to GitHub
+**** DONE Push to GitHub
 **** TODO Publish to crates.io
 *** Further Work
 **** TODO Read the LSM key/value stores research paper on secondary index algorithms
 ***** Has various approaches to implementing indices
+**** TODO Support some form of "reduce" operation, like PouchDB
 ** Alternative Databases
 *** [[https://github.com/spacejam/sled][sled]] is similar to RocksDB, written in Rust
 **** would use their ~keyspace~ in place of column families
