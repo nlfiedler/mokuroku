@@ -114,8 +114,8 @@ for result in results {
 
 Quick note on the terminology that this project uses. You may see the term
 _view_ used here and there. This is what CouchDB and PouchDB call the indices in
-the documentation. Given this crate attempts to operate in a similar fashion, it
-seems natural to use the same term.
+their documentation. Given this crate attempts to operate in a similar fashion,
+it seems natural to use the same term.
 
 ### Usage
 

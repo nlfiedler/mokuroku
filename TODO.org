@@ -46,7 +46,8 @@
 **** DONE Write a simple example crate in =examples= directory
 **** DONE Populate =Cargo.toml= with useful meta information
 **** DONE Push to GitHub
-**** TODO Publish to crates.io
+**** DONE Publish to crates.io
+**** TODO Add references to the research papers
 *** Further Work
 **** TODO Read the LSM key/value stores research paper on secondary index algorithms
 ***** Has various approaches to implementing indices
