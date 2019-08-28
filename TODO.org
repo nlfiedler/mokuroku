@@ -39,7 +39,7 @@
 **** DONE Write a guide on how to use properly
 ***** Define views at time of DB open
 ***** Prime the indices at startup to improve response time
-**** TODO Start a changelog
+**** DONE Start a changelog
 **** DONE Write API documentation at the module level
 ***** assumes we already wrote function-level documentation
 **** DONE Write a quick example for the =README.md=

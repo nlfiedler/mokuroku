@@ -3,19 +3,49 @@
 ## Overview
 
 This [Rust](https://www.rust-lang.org) crate is designed to provide a secondary
-index on top of the [RocksDB](https://rocksdb.org) key/value store, much like
-[PouchDB](https://pouchdb.com) does for LevelDB. The application provides
+index on top of the [RocksDB](https://rocksdb.org) key/value store, similar to
+what [PouchDB](https://pouchdb.com) does for LevelDB. The application provides
 implementations of the `Document` trait to suit the various types of data to be
 stored in the database, and this library will invoke a mapping function provided
 by the application to produce index key/value pairs.
 
 The design of this library is similar to PouchDB, albeit with an API suitable
 for the language. Unlike PouchDB, however, this library does not put any
-constraints on the format of the database records. As a result, the API relies
-on the application to provide the functions for deserializing records and
+constraints on the format of the database records. As a result, the library
+relies on the application to provide the functions for deserializing records and
 invoking the `emit()` function with index key/value pairs. To avoid unnecessary
-deserialization, the library will call `Document.map()` with each defined view
+deserialization, the library will call `Document.map()` with each defined index
 whenever the application calls the `put()` function on the `Database` instance.
+
+### Classification
+
+What this library does exactly: the indices managed by this library are
+"stand-alone", meaning they are not embedded in the database. Additionally, the
+index is updated in a lazy fashion, meaning that changes are appended rather
+than merged on update. At query time, the library will merge the results
+accordingly. This strategy avoids unnecessary reads during write operations,
+thus keeping the general performance of the database within expectations. The
+performance penalty of the index comes (mostly) at query time.
+
+### Work in Progress
+
+The secondary indices work well if you never update or remove records. That is,
+the `delete()` call does not update the indices at all, and if an existing
+record is changed with `put()` and it emits new index values, the old ones will
+still be returned in queries. This will be addressed in a future release as this
+is clearly not adequate for all applications.
+
+As a quick note, the plan is to use tombstones to mark deleted records, and
+employ a read repair strategy on query. Again, keeping the write performance in
+line with expectations, and taking the penalty at the time of query. How the
+index will be updated when existing records are changed is not yet decided.
+
+### Contributions Are Welcome
+
+While the author has read a couple of relevant research papers, he is not by any
+means an expert in database technology. Likewise, his Rust skills may not be all
+that impressive either. If you wish to contribute, by all means, please do.
+Thank you in advance.
 
 ## Building and Testing
 
@@ -41,9 +71,9 @@ index using specific key values.
 
 ### Quick Example
 
-This code snippet is lifted from the aforementioned example. In shows the most
+This code snippet is lifted from the aforementioned example. It shows the most
 basic usage of opening the database, adding records, and querying an index.
-Examples of functions for generating the index are in `examples/tagged`
+Examples of the functions for generating the index are in `examples/tagged`
 directory.
 
 ```rust
@@ -80,9 +110,16 @@ for result in results {
 
 ## Design
 
+### Terminology
+
+Quick note on the terminology that this project uses. You may see the term
+_view_ used here and there. This is what CouchDB and PouchDB call the indices in
+the documentation. Given this crate attempts to operate in a similar fashion, it
+seems natural to use the same term.
+
 ### Usage
 
-The application uses the `mokuroku::Database` struct rather than `rocksb::DB`,
+The application uses the `mokuroku::Database` struct in place of `rocksb::DB`,
 as this crate will create and manage that `DB` instance. Since the crate is
 managing the secondary indices, it is necessary for the application to call the
 `put()` function on `Database`, rather than calling directly to `DB`. For
@@ -93,14 +130,14 @@ At startup, the application will create an instance of `Database` and provide
 three pieces of information.
 
 1. Path to the database files, just as with `DB::open()`
-1. Collection of view (index) names that will be passed to `Document.map()`
+1. Collection of index names that will be passed to `Document.map()`
 1. A boxed function of type `mokuroku::ByteMapper`
 
-The set of view names are those indices which the library will update every time
+The set of index names are those indices which the library will update every time
 `Database.put()` is called. That is, the implementation of `Document` that is
 passed to the `put()` call will have its `map()` invoked with each of the
-provided view names. Not every `Document` will emit index key/value pairs for
-every view. In fact, there is no requirement to emit anything, it is entirely
+provided index names. Not every `Document` will emit index key/value pairs for
+every index. In fact, there is no requirement to emit anything, it is entirely
 application dependent. Similarly, a single invocation of a mapper may emit
 multiple values, which is demonstrated in the `tagged` example.
 
@@ -111,7 +148,7 @@ implementation. For this reason, the application must provide this function to
 recognize and deserialize records, and then emit index key/value pairs.
 
 After setting up the database, the application may want to invoke `query()` on
-the database for each named view. This will cause the library to build the
+the database for each named index. This will cause the library to build the
 indices if they are missing, which will improve the response time of subsequent
 calls to `query()`.
 
@@ -120,14 +157,14 @@ calls to `query()`.
 The application defines the database record format; this library does not put
 any restrictions on the format of the keys or values. That is a big part of why
 the usage is slightly more complicated. This is _not_ PouchDB and the documents
-are _not_ all JSON formatted blobs of stuff.
+are _not_ all JSON formatted blobs.
 
 The library maintains the secondary indices in separate column families, whose
-names start with `mrview-` to avoid collision with any column family that
-application have created. For instance, if the application creates a view named
-"tags", then the library will create a column family named `mrview-tags` and
-populate it with the values given to the `Emitter` passed to the implementations
-of `Document.map()` and `ByteMapper` defined by the application.
+names start with `mrview-` to avoid collision with any column family that the
+application may have created. For instance, if the application creates an index
+named **tags**, then the library will create a column family named `mrview-tags`
+and populate it with the values given to the `Emitter` passed to the
+implementations of `Document.map()` and `ByteMapper` defined by the application.
 
 The index keys output by the application need not be unique. The library will
 append a unique suffix (a [ULID](https://github.com/ulid/spec) to be specific)
