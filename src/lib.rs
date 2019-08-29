@@ -4,7 +4,7 @@
 
 //! Create an instance of `Database`, much like you would with `rocksdb::DB`.
 //! Provide the path to the database files, the set of view names to maintain,
-//! and a `ByteMapper` that will assit in building indices from existing data.
+//! and a `ByteMapper` that will assist in building indices from existing data.
 //! See the README and `examples` directory for examples.
 //!
 //! The secondary indices are built when `Database.query()` is called and the
@@ -317,7 +317,7 @@ impl Database {
         }
         self.db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing column familiy"))
+            .ok_or_else(|| err_msg("missing column family"))
     }
 
     ///
