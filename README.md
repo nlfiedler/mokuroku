@@ -4,18 +4,18 @@
 
 This [Rust](https://www.rust-lang.org) crate is designed to provide a secondary
 index on top of the [RocksDB](https://rocksdb.org) key/value store, similar to
-what [PouchDB](https://pouchdb.com) does for LevelDB. The application provides
+what [PouchDB](https://pouchdb.com) does for LevelDB. Your application will provide
 implementations of the `Document` trait to suit the various types of data to be
-stored in the database, and this library will invoke a mapping function provided
-by the application to produce index key/value pairs.
+stored in the database, and this library will invoke the mapping function on those
+`Document` instances to produce index key/value pairs.
 
-The design of this library is similar to PouchDB, albeit with an API suitable
+The behavior of this library is similar to PouchDB, albeit with an API suitable
 for the language. Unlike PouchDB, however, this library does not put any
 constraints on the format of the database records. As a result, the library
 relies on the application to provide the functions for deserializing records and
 invoking the `emit()` function with index key/value pairs. To avoid unnecessary
 deserialization, the library will call `Document.map()` with each defined index
-whenever the application calls the `put()` function on the `Database` instance.
+name whenever the application calls the `put()` function on the `Database` instance.
 
 ### Classification
 
@@ -33,7 +33,7 @@ The secondary indices work well if you never update or remove records. That is,
 the `delete()` call does not update the indices at all, and if an existing
 record is changed with `put()` and it emits new index values, the old ones will
 still be returned in queries. This will be addressed in a future release as this
-is clearly not adequate for all applications.
+is clearly not adequate for most applications.
 
 As a quick note, the plan is to use tombstones to mark deleted records, and
 employ a read repair strategy on query. Again, keeping the write performance in
@@ -113,16 +113,18 @@ for result in results {
 ### Terminology
 
 Quick note on the terminology that this project uses. You may see the term
-_view_ used here and there. This is what CouchDB and PouchDB call the indices in
-their documentation. Given this crate attempts to operate in a similar fashion,
-it seems natural to use the same term.
+_view_ used here and there. This is what [CouchDB](https://couchdb.apache.org)
+and PouchDB call the indices in their documentation. Given this crate attempts
+to operate in a similar fashion, it seems natural to use the same term. The
+function name `emit` also comes from the "map/reduce" API of CouchDB, and
+makes as much sense as anything else.
 
 ### Usage
 
-The application uses the `mokuroku::Database` struct in place of `rocksb::DB`,
+The application will use the `mokuroku::Database` struct in place of `rocksb::DB`,
 as this crate will create and manage that `DB` instance. Since the crate is
 managing the secondary indices, it is necessary for the application to call the
-`put()` function on `Database`, rather than calling directly to `DB`. For
+`put()` function on `Database`, rather than calling directly to `DB`. For those
 operations that should not affect any index, the application is free to get a
 direct reference to `DB` using the `Database.db()` function.
 
