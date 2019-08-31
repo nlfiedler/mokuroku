@@ -169,8 +169,7 @@ and populate it with the values given to the `Emitter` passed to the
 implementations of `Document.map()` and `ByteMapper` defined by the application.
 
 The index keys output by the application need not be unique. The library will
-append a unique suffix (a [ULID](https://github.com/ulid/spec) to be specific)
-to ensure that no index entry will overwrite any other. The application can emit
-an optional value for the index entry, while the library will inject the primary
-key automatically before saving the index row to the database. The format of
-that index value is entirely up to the application.
+append the data record primary key to ensure that no index entry will overwrite
+any other (the two keys are separated by a null byte; if you need to change this
+use the `Database.separator()` function). The application can emit an optional
+value for the index entry, whose format is entirely up to the application.

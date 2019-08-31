@@ -8,24 +8,24 @@
 //! See the README and `examples` directory for examples.
 //!
 //! The secondary indices are built when `Database.query()` is called and the
-//! corresponding column family is missing. An application may then want to open
-//! the database and subsequently call `query()` for every view. This will cause
-//! the index to be built based on the existing data. If for whatever reason the
-//! application deems it necessary to rebuild an index, that can be accomplished
-//! by calling the `rebuild()` function.
+//! corresponding column family is missing. Knowing this, an application may
+//! want to open the database and subsequently call `query()` for every view.
+//! This will cause the index to be built based on the existing data. If for
+//! whatever reason the application deems it necessary to rebuild an index, that
+//! can be accomplished by calling the `rebuild()` function.
 //!
-//! The `Document.map()` functions are like redux.js reducers. Every view will
-//! eventually be passed to every implementation of `Document`, and it is up to
-//! the application to ignore views that are not relevant for the given document
-//! type.
+//! The `Document.map()` functions are like redux.js reducers. Every view name
+//! will eventually be passed to every implementation of `Document`, and it is
+//! up to the application to ignore views that are not relevant for the given
+//! document type.
 //!
-//! The reason for the `Document` and the `ByteMapper` is that we want to avoid
-//! any unnecessary deserialization when updating the secondary index. When
-//! putting a document in the database, there is no need to deserialize it, so
-//! the `map()` will be called on the `Document` instance with every available
-//! view. However, in the case of a view being created from existing data, we
-//! must deserialize every record in the default column family, and that is
-//! where the `ByteMapper` comes in -- it will recognize the key and/or value
+//! The reason for having both the `Document` and the `ByteMapper` is that we
+//! want to avoid any unnecessary deserialization when updating the secondary
+//! index. When putting a `Document` in the database, there is no need to
+//! deserialize it, so the `map()` will be called on it with every available
+//! view. However, in the case of a view being created from existing data, the
+//! library must deserialize every record in the default column family, and that
+//! is where the `ByteMapper` comes in -- it will recognize the key and/or value
 //! and perform the appropriate deserialization (likely using an implementation
 //! of `Document`) and invoke the provided `Emitter` with index values.
 //!
@@ -33,14 +33,19 @@
 //! correctly accounted for. That will be addressed in a future release. In the
 //! mean time, you can forcibly rebuild an index by calling `rebuild()` on the
 //! `Database` instance._
+//!
+//! **N.B.** The index key emitted by the application is combined with the data
+//! record primary key, separated by a single null byte. Using a separator is
+//! necessary since the library does not know in advance how long either of
+//! these keys is expected to be, and the index query depends heavily on using
+//! the prefix iterator to speed up the search. If you need to change the
+//! separator, use the `Database.separator()` function. If at some later time
+//! you decide to change the separator, you will need to rebuild the indices.
 
 use failure::{err_msg, Error};
 use rocksdb::{ColumnFamily, DBIterator, IteratorMode, Options, DB};
-use std::convert::TryInto;
 use std::fmt;
-use std::io::Write;
 use std::path::Path;
-use ulid::Ulid;
 
 ///
 /// `Document` defines a few operations required for building the index. Any
@@ -95,12 +100,14 @@ pub struct Emitter<'a> {
     key: &'a [u8],
     /// Column family for the index
     cf: &'a ColumnFamily<'a>,
+    /// Index key separator sequence.
+    sep: &'a [u8],
 }
 
 impl<'a> Emitter<'a> {
     /// Construct an Emitter for processing the given key and view.
-    fn new(db: &'a DB, key: &'a [u8], cf: &'a ColumnFamily) -> Self {
-        Self { db, key, cf }
+    fn new(db: &'a DB, key: &'a [u8], cf: &'a ColumnFamily, sep: &'a [u8]) -> Self {
+        Self { db, key, cf, sep }
     }
 
     ///
@@ -111,23 +118,21 @@ impl<'a> Emitter<'a> {
     where
         B: AsRef<[u8]>,
     {
-        let ulid = Ulid::new().to_string();
-        // to allow for duplicate keys emitted from the map function, add a
-        // unique suffix to the index key
-        let mut uniq_key: Vec<u8> = Vec::with_capacity(ikey.as_ref().len() + KEY_SUFFIX_LEN);
+        // to allow for duplicate keys emitted from the map function, add the
+        // key separator and the primary data record key
+        let len = ikey.as_ref().len() + self.sep.len() + self.key.len();
+        let mut uniq_key: Vec<u8> = Vec::with_capacity(len);
         uniq_key.extend_from_slice(&ikey.as_ref()[..]);
-        uniq_key.push(b'-');
-        uniq_key.extend_from_slice(&ulid.as_bytes());
-        // index value is the original document key and the given value, plus
-        // the length of the primary key so we can separate them later
-        let value_len = ivalue.as_ref().map_or(0, |v| v.as_ref().len());
-        let mut id_value: Vec<u8> = Vec::with_capacity(self.key.len() + value_len + SIZEOF_KEY);
-        let _ = id_value.write((self.key.len() as u32).to_le_bytes().as_ref());
-        let _ = id_value.write(self.key);
-        if let Some(value) = ivalue.as_ref() {
-            let _ = id_value.write(value.as_ref());
-        }
-        self.db.put_cf(*self.cf, &uniq_key, &id_value)?;
+        uniq_key.extend_from_slice(self.sep);
+        uniq_key.extend_from_slice(self.key);
+        // index value is either the given value or an empty slice
+        let empty = vec![];
+        let id_value: &[u8] = if let Some(value) = ivalue.as_ref() {
+            value.as_ref()
+        } else {
+            &empty
+        };
+        self.db.put_cf(*self.cf, &uniq_key, id_value)?;
         Ok(())
     }
 }
@@ -155,18 +160,14 @@ pub struct Database {
     views: Vec<String>,
     /// Given a document key/value pair, emits index key/value pairs.
     mapper: ByteMapper,
+    /// The index key separator sequence.
+    key_sep: Vec<u8>,
 }
 
 // Secondary indices are column families with our special prefix. This prefix
 // resembles that used by PouchDB for its indices, but it also happens to be an
 // abbreviation of "mokuroku view", so it's all good.
 const VIEW_PREFIX: &str = "mrview-";
-// Key suffix is a dash and 26 character ULID hex string.
-const KEY_SUFFIX_LEN: usize = 27;
-// Maximum size in bytes of a record key for application data.
-const MAX_KEY_LEN: usize = 4_294_967_296;
-// Number of bytes used to represent the length of the document key.
-const SIZEOF_KEY: usize = 4;
 
 impl Database {
     ///
@@ -195,7 +196,20 @@ impl Database {
             db,
             views: myviews,
             mapper,
+            key_sep: vec![0],
         })
+    }
+
+    ///
+    /// Set the separator byte sequence used to separate the index key from the
+    /// primary data record key in the index. The default is a single null byte.
+    ///
+    pub fn separator(mut self, sep: &[u8]) -> Self {
+        if sep.is_empty() {
+            panic!("separator must be one or more bytes");
+        }
+        self.key_sep = sep.to_owned();
+        self
     }
 
     ///
@@ -221,10 +235,6 @@ impl Database {
         D: Document,
         K: AsRef<[u8]>,
     {
-        assert!(
-            key.as_ref().len() <= MAX_KEY_LEN,
-            "key length must be under 4mb"
-        );
         let bytes = value.to_bytes()?;
         self.db.put(key.as_ref(), bytes)?;
         // process every index on update
@@ -233,7 +243,7 @@ impl Database {
             mrview.push_str(&view);
             // only update the index if the column family exists
             if let Some(cf) = self.db.cf_handle(&mrview) {
-                let emitter = Emitter::new(&self.db, key.as_ref(), &cf);
+                let emitter = Emitter::new(&self.db, key.as_ref(), &cf, &self.key_sep);
                 D::map(&value, &view, &emitter)?;
             }
         }
@@ -273,7 +283,7 @@ impl Database {
     pub fn query(&self, view: &str) -> Result<QueryIterator, Error> {
         let cf = self.ensure_view_built(view)?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start)?;
-        let qiter = QueryIterator::new(iter);
+        let qiter = QueryIterator::new(iter, &self.key_sep);
         Ok(qiter)
     }
 
@@ -287,7 +297,7 @@ impl Database {
     pub fn query_by_key<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<QueryIterator, Error> {
         let cf = self.ensure_view_built(view)?;
         let iter = self.db.prefix_iterator_cf(cf, key.as_ref())?;
-        let qiter = QueryIterator::new_prefix(iter, key.as_ref());
+        let qiter = QueryIterator::new_prefix(iter, &self.key_sep, key.as_ref());
         Ok(qiter)
     }
 
@@ -328,7 +338,7 @@ impl Database {
         let cf = self.db.create_cf(&mrview, &opts)?;
         let iter = self.db.iterator(IteratorMode::Start);
         for (key, value) in iter {
-            let emitter = Emitter::new(&self.db, &key, &cf);
+            let emitter = Emitter::new(&self.db, &key, &cf, &self.key_sep);
             (*self.mapper)(&key, &value, view, &emitter)?;
         }
         Ok(())
@@ -364,24 +374,50 @@ pub struct QueryIterator<'a> {
     dbiter: DBIterator<'a>,
     /// Key prefix to filter results, if any.
     prefix: Option<Vec<u8>>,
+    /// Index key separator sequence.
+    key_sep: &'a [u8],
 }
 
 impl<'a> QueryIterator<'a> {
     /// Construct a new QueryIterator from the DBIterator.
-    fn new(dbiter: DBIterator<'a>) -> Self {
+    fn new(dbiter: DBIterator<'a>, sep: &'a [u8]) -> Self {
         Self {
             dbiter,
             prefix: None,
+            key_sep: sep,
         }
     }
 
     /// Construct a new QueryIterator that only returns results whose key
     /// matches the given prefix.
-    fn new_prefix(dbiter: DBIterator<'a>, prefix: &[u8]) -> Self {
+    fn new_prefix(dbiter: DBIterator<'a>, sep: &'a [u8], prefix: &[u8]) -> Self {
         Self {
             dbiter,
             prefix: Some(prefix.to_owned()),
+            key_sep: sep,
         }
+    }
+
+    /// Find the position of the key separator in the index key.
+    fn find_separator(&self, key: &[u8]) -> usize {
+        // for single-byte separators, use the simple approach
+        if self.key_sep.len() == 1 {
+            if let Some(pos) = key.iter().position(|&x| x == self.key_sep[0]) {
+                return pos;
+            }
+            return 0;
+        }
+        //
+        // Should use Knuth–Morris–Pratt string-searching algorithm to find the
+        // position for multi-byte separators. It is vastly more complicated,
+        // but it would be faster when done many times over.
+        //
+        for (idx, win) in key.windows(self.key_sep.len()).enumerate() {
+            if win == self.key_sep {
+                return idx;
+            }
+        }
+        0
     }
 }
 
@@ -395,26 +431,17 @@ impl<'a> Iterator for QueryIterator<'a> {
                 if key.len() < prefix.len() {
                     return None;
                 }
-                let pre_key = &key[..prefix.len()];
-                if pre_key != &prefix[..] {
+                if key[..prefix.len()] != prefix[..] {
                     return None;
                 }
             }
-            // remove the dash and ULID suffix from the index key
-            let end = key.len() - KEY_SUFFIX_LEN;
-            let mut short_key: Vec<u8> = Vec::with_capacity(end);
-            short_key.extend_from_slice(&key[..end]);
-            // split the index value into the original document key and the
-            // index value provided by the application
-            let key_len = read_le_u32(&value) as usize;
-            let mut doc_id: Vec<u8> = Vec::with_capacity(key_len);
-            let key_end = key_len + SIZEOF_KEY;
-            doc_id.extend_from_slice(&value[SIZEOF_KEY..key_end]);
-            let mut ivalue: Vec<u8> = Vec::with_capacity(value.len() - key_end);
-            ivalue.extend_from_slice(&value[key_end..]);
+            // separate the index key from the primary key
+            let sep_pos = self.find_separator(&key);
+            let short_key = key[..sep_pos].to_vec();
+            let doc_id = key[sep_pos + self.key_sep.len()..].to_vec();
             return Some(QueryResult::new(
                 short_key.into_boxed_slice(),
-                ivalue.into_boxed_slice(),
+                value,
                 doc_id.into_boxed_slice(),
             ));
         }
@@ -426,12 +453,6 @@ impl<'a> fmt::Debug for QueryIterator<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "QueryIterator")
     }
-}
-
-/// Read a u32 from the first four bytes of the slice.
-fn read_le_u32(input: &[u8]) -> u32 {
-    let (int_bytes, _rest) = input.split_at(std::mem::size_of::<u32>());
-    u32::from_le_bytes(int_bytes.try_into().unwrap())
 }
 
 #[cfg(test)]
@@ -764,6 +785,76 @@ mod tests {
             .collect();
         assert_eq!(keys.len(), 2);
         assert!(keys.contains(&String::from("as/baadf00d")));
+        assert!(keys.contains(&String::from("as/1badb002")));
+    }
+
+    #[test]
+    fn query_by_key_separator() {
+        // query by key with a multi-byte key separator sequence
+        let db_path = "tmp/test/query_by_key_separator";
+        let _ = fs::remove_dir_all(db_path);
+        let mut views: Vec<String> = Vec::new();
+        views.push("tags".to_owned());
+        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let sep = vec![0xff, 0xff, 0xff];
+        let dbase = dbase.separator(&sep);
+        let documents = [
+            Asset {
+                key: String::from("as/cafebabe"),
+                location: String::from("hawaii"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("black"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/cafed00d"),
+                location: String::from("taiwan"),
+                tags: vec![
+                    String::from("dog"),
+                    String::from("black"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
+                key: String::from("as/1badb002"),
+                location: String::from("hakone"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("ears"),
+                ],
+            },
+            Asset {
+                key: String::from("as/baadf00d"),
+                location: String::from("dublin"),
+                tags: vec![
+                    String::from("mouse"),
+                    String::from("white"),
+                    String::from("tail"),
+                ],
+            },
+        ];
+        for document in documents.iter() {
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, document);
+            assert!(result.is_ok());
+        }
+
+        // querying by a specific tag: cat
+        let result = dbase.query_by_key("tags", b"cat");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.key.as_ref() == b"cat"));
+        let keys: Vec<String> = results
+            .iter()
+            .map(|r| str::from_utf8(&r.doc_id).unwrap().to_owned())
+            .collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&String::from("as/cafebabe")));
         assert!(keys.contains(&String::from("as/1badb002")));
     }
 }

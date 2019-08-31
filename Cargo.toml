@@ -16,7 +16,6 @@ exclude = [
 [dependencies]
 failure = "0.1.5"
 rocksdb = "0.12.3"
-ulid = "0.3.1"
 
 [dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }
