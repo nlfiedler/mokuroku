@@ -10,22 +10,32 @@ stored in the database, and this library will invoke the mapping function on tho
 `Document` instances to produce index key/value pairs.
 
 The behavior of this library is similar to PouchDB, albeit with an API suitable
-for the language. Unlike PouchDB, however, this library does not put any
-constraints on the format of the database records. As a result, the library
-relies on the application to provide the functions for deserializing records and
-invoking the `emit()` function with index key/value pairs. To avoid unnecessary
-deserialization, the library will call `Document.map()` with each defined index
-name whenever the application calls the `put()` function on the `Database` instance.
+for the language. Unlike PouchDB, this library does not put any constraints on
+the format of the database records. As a result, the library relies on the
+application to provide the functions for deserializing records and invoking the
+`emit()` function with the secondary key and an optional value. To avoid
+unnecessary deserialization, the library will call `Document.map()` with each
+defined index name whenever the application calls the `put()` function on the
+`Database` instance.
 
 ### Classification
 
 What this library does exactly: the indices managed by this library are
-"stand-alone", meaning they are not embedded in the database. Additionally, the
-index is updated in a lazy fashion, meaning that changes are appended rather
-than merged on update. At query time, the library will merge the results
-accordingly. This strategy avoids unnecessary reads during write operations,
-thus keeping the general performance of the database within expectations. The
-performance penalty of the index comes (mostly) at query time.
+"stand-alone", meaning they are not embedded within the database files (e.g.
+zone maps or bloom filters). Additionally, the index is updated in a lazy
+fashion, meaning that changes are appended rather than eagerly merged on update.
+This description from [3] nicely captures the overall performance:
+
+> Here, each entry in the secondary indexes is a composite key consisting of
+> (secondary key + primary key). The secondary lookup is a prefix search on
+> secondary key, which can be implemented using regular range search on the
+> index table. Here, writes and compactions are faster than "Lazy," but
+> secondary attribute lookup may be slower as it needs to perform a range scan
+> on the index table. 
+
+One difference from a simple composite index is that this library permits the
+application to emit a value along with the secondary key, in place of the `null`
+that would normally be the value in the secondary index.
 
 ### Work in Progress
 
@@ -173,3 +183,12 @@ append the data record primary key to ensure that no index entry will overwrite
 any other (the two keys are separated by a null byte; if you need to change this
 use the `Database.separator()` function). The application can emit an optional
 value for the index entry, whose format is entirely up to the application.
+
+## References
+
+In published order, the following papers were evaluated during the design of
+this library, with the second being the most relevant.
+
+* \[1\]: [Diff-Index: Differentiated Index in Distributed Log-Structured Data Stores](https://www.semanticscholar.org/paper/Diff-Index%3A-Differentiated-Index-in-Distributed-Tan-Tata/385d44dccb9c24a039d12c2eb2f011f5a057466d)
+* \[2\]: [Efficient Secondary Attribute Lookup in NoSQL Databases](https://www.semanticscholar.org/paper/Efficient-Secondary-Attribute-Lookup-in-NoSQL-Qader-Cheng/f78c397df0f3296b97178f773514b7c6c8a99cf2)
+* \[3\]: [Comparative Study of Secondary Indexing Techniques in LSM-based NoSQL Databases](https://www.semanticscholar.org/paper/A-Comparative-Study-of-Secondary-Indexing-in-NoSQL-Qader-Cheng/1c8b5b018f61c8170554a2cd38b689f3b1e5eab2)

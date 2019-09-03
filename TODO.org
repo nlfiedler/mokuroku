@@ -1,49 +1,35 @@
 * mokuroku
 ** Implementation
 *** Development
-**** TODO Read papers on secondary index strategies
+**** DONE Read papers on secondary index strategies
 ***** DONE Diff-Index: Differentiated Index in Distributed Log-Structured Data Stores
 ****** Diff-Index stores the primary key after the index key
-****** Diff-Index assumes index value is the same as the base value?
-******* probably they are doing the index on a single column, so this makes sense
+****** Diff-Index assumes index value is the same as the base value
 ***** DONE Efficient Secondary Attribute Lookup in NoSQL Databases
+****** their embedded index requires modifying LevelDB internal structures
 ****** like Diff-Index, assumes index values match readily available data attributes
 ****** overall performance of "lazy updates" on a stand-alone index is as good as it gets
-****** performance is very good with read-heavy workloads
-***** TODO Comparative Study of Secondary Indexing Techniques in LSM-based NoSQL Databases
+****** performance of lazy updates is very good with read-heavy workloads
+***** DONE Comparative Study of Secondary Indexing Techniques in LSM-based NoSQL Databases
+****** composite index performs well most of the time
 ***** c.f. http://dblab.cs.ucr.edu/projects/KeyValueIndexes/
-***** current impl is akin to "lazy" updates on a stand-alone index
-****** index is stored separately from data (column family)
-****** appends new index rows on write
-****** merges index rows on query
-****** what Diff-Index refers to as ~sync-insert~
-***** based on the Efficient Secondary Attribute Lookup in NoSQL Databases paper
-****** the secondary index with lazy updates performs pretty well in most cases
-****** their embedded index requires modifying LevelDB internal structures
-**** DONE Consider defining a database format like HBase
-***** HBase uses key, column name, column value
-***** Data record key would be key + column name in RocksDB
-***** Each index would be on a column, no application code needed
-***** Repairing a stale index would be very easy, just look up key+column-name and compare values
-***** How then would something like "tags" be written to the database?
-****** particularly, how would that be indexed and queried?
-***** an interesting idea, but not at all flexible, seems difficult to use
-**** DONE Change the format of the index keys and values
 **** TODO Update stale index entries on =put()= and =delete()=
 ***** both =put= and =delete= are the same thing: old index values are stale
+***** timestamp vs sequence number
+****** Comparative Study paper uses the LevelDB "sequence number" feature for time ordering
+****** rust-rocksdb does not yet expose this feature of RocksDB
 ***** on update, store primary key in ~mrview--changes~ cf with timestamp value
 ****** ts would be nanos since epoch, a 16 byte value
 ****** =let ts: u128 = SystemTime.duration_since(std::time::UNIX_EPOCH)?.as_nanos();=
-***** on query, perform "read repair" of updated entries based on timestamp
+***** on query, perform compaction of updated entries based on timestamp
 ****** Cassandra does a "read repair" which prunes stale entries on query
 ***** Diff-Index paper adds index updates to a queue, processes in background
-***** some discussions use the term "tombstone" when marking something outdated
 ***** perhaps maintain a bloom/cuckoo filter of updated primary keys
 ****** https://github.com/seiflotfy/rust-cuckoofilter
 ****** https://github.com/nervosnetwork/bloom-filters
 ****** https://github.com/sagalasan/bloom-filter
-***** on startup, scan ~mrview--changes~ to get prime the bloom filter
-***** on =query()=, find and remove stale entries, clear deleted rows
+****** on startup, scan ~mrview--changes~ to get prime the bloom filter
+***** on =query()= the iterator will detect and remove stale entries
 **** TODO Write the index key/value pairs received in =put()= using a =WriteBatch=
 ***** probably should batch up for each column family (index)
 **** TODO Write a test that rebuilds the index
@@ -75,7 +61,8 @@
 ***** bring-your-own-format for keys and values
 ***** emit zero or more index key and values of your design per data record
 ***** leverage the serialization you are already using with RocksDB
-**** TODO Add references to the research papers
+**** TODO Give an example of how to merge query results a la tanuki tags
+**** DONE Add references to the research papers
 *** Further Work
 **** TODO Read the LSM key/value stores research paper on secondary index algorithms
 ***** Has various approaches to implementing indices
