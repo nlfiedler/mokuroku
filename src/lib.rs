@@ -111,23 +111,24 @@ impl<'a> Emitter<'a> {
     }
 
     ///
-    /// Call this with an index key and value. The index key is _not_ required
-    /// to be unique, and the optional value can be in any format.
+    /// Call this with an index key and value. Each data record can have zero or
+    /// more index entries. The index key is _not_ required to be unique, and
+    /// the optional value can be in any format.
     ///
-    pub fn emit<B>(&self, ikey: B, ivalue: Option<B>) -> Result<(), Error>
+    pub fn emit<B>(&self, key: B, value: Option<B>) -> Result<(), Error>
     where
         B: AsRef<[u8]>,
     {
         // to allow for duplicate keys emitted from the map function, add the
         // key separator and the primary data record key
-        let len = ikey.as_ref().len() + self.sep.len() + self.key.len();
+        let len = key.as_ref().len() + self.sep.len() + self.key.len();
         let mut uniq_key: Vec<u8> = Vec::with_capacity(len);
-        uniq_key.extend_from_slice(&ikey.as_ref()[..]);
+        uniq_key.extend_from_slice(&key.as_ref()[..]);
         uniq_key.extend_from_slice(self.sep);
         uniq_key.extend_from_slice(self.key);
         // index value is either the given value or an empty slice
         let empty = vec![];
-        let id_value: &[u8] = if let Some(value) = ivalue.as_ref() {
+        let id_value: &[u8] = if let Some(value) = value.as_ref() {
             value.as_ref()
         } else {
             &empty
@@ -223,8 +224,8 @@ impl Database {
     }
 
     ///
-    /// Put the key/value pair into the database, ensuring all indices are
-    /// updated, if they have been built.
+    /// Put the data record key/value pair into the database, ensuring all
+    /// indices are updated, if they have been built.
     ///
     /// _N.B. If updating a document results in previous index values being
     /// outdated, the index will be out of sync. This will be addressed in a
@@ -251,7 +252,7 @@ impl Database {
     }
 
     ///
-    /// Retrieve the value with the given key.
+    /// Retrieve the data record with the given key.
     ///
     pub fn get<D, K>(&self, key: K) -> Result<Option<D>, Error>
     where
@@ -266,7 +267,7 @@ impl Database {
     }
 
     ///
-    /// Delete the database record associated with the given key.
+    /// Delete the data record associated with the given key.
     ///
     /// _N.B. This does not yet update the secondary indices.  This will be
     /// addressed in a future release._
@@ -346,7 +347,10 @@ impl Database {
 }
 
 ///
-/// `QueryResult` represents a single result from a query.
+/// `QueryResult` represents a single result from a query. The `key` is that
+/// which was emitted by the application, and similarly the `value` is whatever
+/// the application emitted along with the key. The `doc_id` is the primary key
+/// of the data record.
 ///
 #[derive(Debug)]
 pub struct QueryResult {
