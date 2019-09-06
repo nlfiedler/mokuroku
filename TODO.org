@@ -13,23 +13,28 @@
 ***** DONE Comparative Study of Secondary Indexing Techniques in LSM-based NoSQL Databases
 ****** composite index performs well most of the time
 ***** c.f. http://dblab.cs.ucr.edu/projects/KeyValueIndexes/
-**** TODO Update stale index entries on =put()= and =delete()=
+**** DONE Update stale index entries on =put()= and =delete()=
 ***** both =put= and =delete= are the same thing: old index values are stale
 ***** timestamp vs sequence number
-****** Comparative Study paper uses the LevelDB "sequence number" feature for time ordering
+****** Comparative Study paper uses the LevelDB "sequence number" feature for ordering
 ****** rust-rocksdb does not yet expose this feature of RocksDB
 ***** on update, store primary key in ~mrview--changes~ cf with timestamp value
 ****** ts would be nanos since epoch, a 16 byte value
 ****** =let ts: u128 = SystemTime.duration_since(std::time::UNIX_EPOCH)?.as_nanos();=
-***** on query, perform compaction of updated entries based on timestamp
-****** Cassandra does a "read repair" which prunes stale entries on query
-***** Diff-Index paper adds index updates to a queue, processes in background
+***** on update, store timestamp in index value (first 16 bytes)
+**** TODO Stale entry detection in iterator should cache results
 ***** perhaps maintain a bloom/cuckoo filter of updated primary keys
 ****** https://github.com/seiflotfy/rust-cuckoofilter
 ****** https://github.com/nervosnetwork/bloom-filters
 ****** https://github.com/sagalasan/bloom-filter
 ****** on startup, scan ~mrview--changes~ to get prime the bloom filter
-***** on =query()= the iterator will detect and remove stale entries
+***** on query, perform compaction of updated entries based on timestamp
+****** Cassandra does a "read repair" which prunes stale entries on query
+****** fetch latest ts from ~mrview--changes~ for each entry
+****** skip results until the ts is higher than the latest change
+****** would likely have to keep an in-memory map during the iteration
+**** TODO Should prune stale index entries via compaction
+***** Diff-Index paper adds index updates to a queue, processes in background
 **** TODO Write the index key/value pairs received in =put()= using a =WriteBatch=
 ***** probably should batch up for each column family (index)
 **** TODO Write a test that rebuilds the index
@@ -39,6 +44,8 @@
 ***** Called by the application in an ad hoc fashion
 ***** Delete any column families with our prefix that do not match any registered view
 **** TODO Support the =rocksdb::WriteBatch= atomic commit feature
+**** TODO Should have a version number in the database so crate can know to rebuild indices
+***** i.e. whenever the format changes, the library should rebuild the index as needed
 **** TODO Using some assumed key/value sizes, compute the overhead of the index, add to README
 **** TODO Consider using the KMP algorithm to find the index key separator
 ***** c.f. https://en.wikipedia.org/wiki/Knuth–Morris–Pratt_algorithm

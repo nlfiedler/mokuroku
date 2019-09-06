@@ -29,11 +29,6 @@
 //! and perform the appropriate deserialization (likely using an implementation
 //! of `Document`) and invoke the provided `Emitter` with index values.
 //!
-//! **N.B.** _Presently any delete or update that would affect an index is not
-//! correctly accounted for. That will be addressed in a future release. In the
-//! mean time, you can forcibly rebuild an index by calling `rebuild()` on the
-//! `Database` instance._
-//!
 //! **N.B.** The index key emitted by the application is combined with the data
 //! record primary key, separated by a single null byte. Using a separator is
 //! necessary since the library does not know in advance how long either of
@@ -44,8 +39,10 @@
 
 use failure::{err_msg, Error};
 use rocksdb::{ColumnFamily, DBIterator, IteratorMode, Options, DB};
+use std::convert::TryInto;
 use std::fmt;
 use std::path::Path;
+use std::time::SystemTime;
 
 ///
 /// `Document` defines a few operations required for building the index. Any
@@ -102,12 +99,23 @@ pub struct Emitter<'a> {
     cf: &'a ColumnFamily<'a>,
     /// Index key separator sequence.
     sep: &'a [u8],
+    /// Duration since Unix epoch in nanos.
+    ts: Vec<u8>,
 }
 
 impl<'a> Emitter<'a> {
     /// Construct an Emitter for processing the given key and view.
     fn new(db: &'a DB, key: &'a [u8], cf: &'a ColumnFamily, sep: &'a [u8]) -> Self {
-        Self { db, key, cf, sep }
+        // get the current time for detecting stale records later; once
+        // rust-rocksdb exposes the sequence number, use that instead
+        let ts = nanos_since_epoch();
+        Self {
+            db,
+            key,
+            cf,
+            sep,
+            ts,
+        }
     }
 
     ///
@@ -126,14 +134,14 @@ impl<'a> Emitter<'a> {
         uniq_key.extend_from_slice(&key.as_ref()[..]);
         uniq_key.extend_from_slice(self.sep);
         uniq_key.extend_from_slice(self.key);
-        // index value is either the given value or an empty slice
-        let empty = vec![];
-        let id_value: &[u8] = if let Some(value) = value.as_ref() {
-            value.as_ref()
-        } else {
-            &empty
-        };
-        self.db.put_cf(*self.cf, &uniq_key, id_value)?;
+        // prefix the index value, if any, with the timestamp
+        let value_len = value.as_ref().map_or(0, |v| v.as_ref().len());
+        let mut ivalue: Vec<u8> = Vec::with_capacity(self.ts.len() + value_len);
+        ivalue.extend_from_slice(&self.ts);
+        if let Some(value) = value.as_ref() {
+            ivalue.extend_from_slice(value.as_ref());
+        }
+        self.db.put_cf(*self.cf, &uniq_key, ivalue)?;
         Ok(())
     }
 }
@@ -169,6 +177,12 @@ pub struct Database {
 // resembles that used by PouchDB for its indices, but it also happens to be an
 // abbreviation of "mokuroku view", so it's all good.
 const VIEW_PREFIX: &str = "mrview-";
+
+// Name of the column family where we track changed data records. For now the
+// key is the data record primary key, and the value is the 16 bytes
+// representing the nanoseconds since the Unix epoch. Eventually it should be
+// the RocksDB sequence number, which seems more suited for this purpose.
+const CHANGES_CF: &str = "mrview--changes";
 
 impl Database {
     ///
@@ -227,10 +241,6 @@ impl Database {
     /// Put the data record key/value pair into the database, ensuring all
     /// indices are updated, if they have been built.
     ///
-    /// _N.B. If updating a document results in previous index values being
-    /// outdated, the index will be out of sync. This will be addressed in a
-    /// future release._
-    ///
     pub fn put<D, K>(&self, key: K, value: &D) -> Result<(), Error>
     where
         D: Document,
@@ -238,6 +248,7 @@ impl Database {
     {
         let bytes = value.to_bytes()?;
         self.db.put(key.as_ref(), bytes)?;
+        self.update_changes(key.as_ref())?;
         // process every index on update
         for view in &self.views {
             let mut mrview = String::from(VIEW_PREFIX);
@@ -269,11 +280,31 @@ impl Database {
     ///
     /// Delete the data record associated with the given key.
     ///
-    /// _N.B. This does not yet update the secondary indices.  This will be
-    /// addressed in a future release._
-    ///
     pub fn delete<K: AsRef<[u8]>>(&self, key: K) -> Result<(), Error> {
         self.db.delete(key.as_ref())?;
+        self.update_changes(key.as_ref())?;
+        Ok(())
+    }
+
+    ///
+    /// Insert a record of the change to the given primary key, tracking
+    /// the time when this change was made.
+    ///
+    fn update_changes<K>(&self, key: K) -> Result<(), Error>
+    where
+        K: AsRef<[u8]>,
+    {
+        let cf_opt = self.db.cf_handle(CHANGES_CF);
+        let cf = if cf_opt.is_none() {
+            let opts = Options::default();
+            self.db.create_cf(CHANGES_CF, &opts)?
+        } else {
+            cf_opt.unwrap()
+        };
+        // currently using a timestamp, but would rather use a sequence number,
+        // once rust-rocksdb exposes that function
+        let ts = nanos_since_epoch();
+        self.db.put_cf(cf, key.as_ref(), &ts)?;
         Ok(())
     }
 
@@ -284,7 +315,7 @@ impl Database {
     pub fn query(&self, view: &str) -> Result<QueryIterator, Error> {
         let cf = self.ensure_view_built(view)?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start)?;
-        let qiter = QueryIterator::new(iter, &self.key_sep);
+        let qiter = QueryIterator::new(&self.db, iter, &self.key_sep);
         Ok(qiter)
     }
 
@@ -298,7 +329,7 @@ impl Database {
     pub fn query_by_key<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<QueryIterator, Error> {
         let cf = self.ensure_view_built(view)?;
         let iter = self.db.prefix_iterator_cf(cf, key.as_ref())?;
-        let qiter = QueryIterator::new_prefix(iter, &self.key_sep, key.as_ref());
+        let qiter = QueryIterator::new_prefix(&self.db, iter, &self.key_sep, key.as_ref());
         Ok(qiter)
     }
 
@@ -347,6 +378,29 @@ impl Database {
 }
 
 ///
+/// Return a vector of 16 bytes representing the nanoseconds since the Unix
+/// epoch, useful for as a very precise timestamp.
+///
+fn nanos_since_epoch() -> Vec<u8> {
+    let now = SystemTime::now();
+    let ts: u128 = if let Ok(duration) = now.duration_since(std::time::UNIX_EPOCH) {
+        duration.as_nanos()
+    } else {
+        0
+    };
+    let ts_bytes = ts.to_le_bytes();
+    ts_bytes.to_vec()
+}
+
+///
+/// Convert the first 16 bytes of the slice into a u128.
+///
+fn read_le_u128(input: &[u8]) -> u128 {
+    let (int_bytes, _rest) = input.split_at(std::mem::size_of::<u128>());
+    u128::from_le_bytes(int_bytes.try_into().unwrap())
+}
+
+///
 /// `QueryResult` represents a single result from a query. The `key` is that
 /// which was emitted by the application, and similarly the `value` is whatever
 /// the application emitted along with the key. The `doc_id` is the primary key
@@ -375,6 +429,8 @@ impl QueryResult {
 ///
 pub struct QueryIterator<'a> {
     /// Reference to Database for fetching records.
+    db: &'a DB,
+    /// Iterator for reading query results.
     dbiter: DBIterator<'a>,
     /// Key prefix to filter results, if any.
     prefix: Option<Vec<u8>>,
@@ -384,8 +440,9 @@ pub struct QueryIterator<'a> {
 
 impl<'a> QueryIterator<'a> {
     /// Construct a new QueryIterator from the DBIterator.
-    fn new(dbiter: DBIterator<'a>, sep: &'a [u8]) -> Self {
+    fn new(db: &'a DB, dbiter: DBIterator<'a>, sep: &'a [u8]) -> Self {
         Self {
+            db,
             dbiter,
             prefix: None,
             key_sep: sep,
@@ -394,8 +451,9 @@ impl<'a> QueryIterator<'a> {
 
     /// Construct a new QueryIterator that only returns results whose key
     /// matches the given prefix.
-    fn new_prefix(dbiter: DBIterator<'a>, sep: &'a [u8], prefix: &[u8]) -> Self {
+    fn new_prefix(db: &'a DB, dbiter: DBIterator<'a>, sep: &'a [u8], prefix: &[u8]) -> Self {
         Self {
+            db,
             dbiter,
             prefix: Some(prefix.to_owned()),
             key_sep: sep,
@@ -423,13 +481,27 @@ impl<'a> QueryIterator<'a> {
         }
         0
     }
+
+    /// Indicate if the given timestamp for an index entry is more recent than
+    /// the "changes" entry for the given primary key.
+    fn is_fresh(&self, key: &[u8], ts: &[u8]) -> bool {
+        if let Some(cf) = self.db.cf_handle(CHANGES_CF) {
+            if let Ok(Some(val)) = self.db.get_cf(cf, key) {
+                let index_ts = read_le_u128(ts);
+                let changed_ts = read_le_u128(&val);
+                return index_ts > changed_ts;
+            }
+        }
+        true
+    }
 }
 
 impl<'a> Iterator for QueryIterator<'a> {
     type Item = QueryResult;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((key, value)) = self.dbiter.next() {
+        // loop until we find a non-stale entry, or run out entirely
+        while let Some((key, value)) = self.dbiter.next() {
             if let Some(prefix) = &self.prefix {
                 // enforce the primary key matching the given prefix
                 if key.len() < prefix.len() {
@@ -443,11 +515,16 @@ impl<'a> Iterator for QueryIterator<'a> {
             let sep_pos = self.find_separator(&key);
             let short_key = key[..sep_pos].to_vec();
             let doc_id = key[sep_pos + self.key_sep.len()..].to_vec();
-            return Some(QueryResult::new(
-                short_key.into_boxed_slice(),
-                value,
-                doc_id.into_boxed_slice(),
-            ));
+            let ts = value[..16].to_vec();
+            if self.is_fresh(&doc_id, &ts) {
+                // lop off the 16 byte timestamp from the index value
+                let ivalue = value[16..].to_vec();
+                return Some(QueryResult::new(
+                    short_key.into_boxed_slice(),
+                    ivalue.into_boxed_slice(),
+                    doc_id.into_boxed_slice(),
+                ));
+            }
         }
         None
     }
@@ -860,5 +937,144 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert!(keys.contains(&String::from("as/cafebabe")));
         assert!(keys.contains(&String::from("as/1badb002")));
+    }
+
+    #[test]
+    fn query_with_changes() {
+        let db_path = "tmp/test/query_with_changes";
+        let _ = fs::remove_dir_all(db_path);
+        let mut views: Vec<String> = Vec::new();
+        views.push("tags".to_owned());
+        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let documents = [
+            Asset {
+                key: String::from("as/cafebabe"),
+                location: String::from("hawaii"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("black"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/cafed00d"),
+                location: String::from("taiwan"),
+                tags: vec![
+                    String::from("dog"),
+                    String::from("black"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
+                key: String::from("as/1badb002"),
+                location: String::from("hakone"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("ears"),
+                ],
+            },
+            Asset {
+                key: String::from("as/baadf00d"),
+                location: String::from("dublin"),
+                tags: vec![
+                    String::from("mouse"),
+                    String::from("white"),
+                    String::from("tail"),
+                ],
+            },
+        ];
+        for document in documents.iter() {
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, document);
+            assert!(result.is_ok());
+        }
+
+        // querying by a specific tag: fur
+        let result = dbase.query_by_key("tags", b"fur");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 1);
+
+        // querying by a specific tag: tail
+        let result = dbase.query_by_key("tags", b"tail");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 2);
+
+        // querying by a specific tag: cat
+        let result = dbase.query_by_key("tags", b"cat");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 2);
+
+        // update a couple of existing records
+        let documents = [
+            Asset {
+                key: String::from("as/cafed00d"),
+                location: String::from("taiwan"),
+                tags: vec![
+                    String::from("dog"),
+                    String::from("black"),
+                    String::from("fuzz"),
+                ],
+            },
+            Asset {
+                key: String::from("as/1badb002"),
+                location: String::from("hakone"),
+                tags: vec![
+                    String::from("dog"),
+                    String::from("black"),
+                    String::from("tail"),
+                ],
+            },
+        ];
+        for document in documents.iter() {
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, document);
+            assert!(result.is_ok());
+        }
+
+        // querying by a specific tag: tail
+        let result = dbase.query_by_key("tags", b"tail");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 3);
+
+        // querying by a specific tag: cat
+        let result = dbase.query_by_key("tags", b"cat");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 1);
+
+        // querying by a specific tag: fur
+        let result = dbase.query_by_key("tags", b"fur");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 0);
+
+        // querying by a specific tag: fuzz
+        let result = dbase.query_by_key("tags", b"fuzz");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 1);
+
+        // delete an entry, and query again
+        let result = dbase.delete(String::from("as/baadf00d").as_bytes());
+        assert!(result.is_ok());
+
+        // querying by a specific tag: mouse
+        let result = dbase.query_by_key("tags", b"mouse");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 0);
     }
 }

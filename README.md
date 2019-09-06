@@ -37,19 +37,6 @@ One difference from a simple composite index is that this library permits the
 application to emit a value along with the secondary key, in place of the `null`
 that would normally be the value in the secondary index.
 
-### Work in Progress
-
-The secondary indices work well if you never update or remove records. That is,
-the `delete()` call does not update the indices at all, and if an existing
-record is changed with `put()` and it emits new index values, the old ones will
-still be returned in queries. This will be addressed in a future release as this
-is clearly not adequate for most applications.
-
-As a quick note, the plan is to use tombstones to mark deleted records, and
-employ a read repair strategy on query. Again, keeping the write performance in
-line with expectations, and taking the penalty at the time of query. How the
-index will be updated when existing records are changed is not yet decided.
-
 ### Contributions Are Welcome
 
 While the author has read a couple of relevant research papers, he is not by any
