@@ -22,6 +22,7 @@
 ****** ts would be nanos since epoch, a 16 byte value
 ****** =let ts: u128 = SystemTime.duration_since(std::time::UNIX_EPOCH)?.as_nanos();=
 ***** on update, store timestamp in index value (first 16 bytes)
+**** TODO Add examples to the various API docs
 **** TODO Stale entry detection in iterator should cache results
 ***** perhaps maintain a bloom/cuckoo filter of updated primary keys
 ****** https://github.com/seiflotfy/rust-cuckoofilter
@@ -33,8 +34,9 @@
 ****** fetch latest ts from ~mrview--changes~ for each entry
 ****** skip results until the ts is higher than the latest change
 ****** would likely have to keep an in-memory map during the iteration
-**** TODO Should prune stale index entries via compaction
+**** DONE Should prune stale index entries via compaction
 ***** Diff-Index paper adds index updates to a queue, processes in background
+**** TODO May want an ~exact~ query option, otherwise =cat= will match =cats=
 **** TODO Write the index key/value pairs received in =put()= using a =WriteBatch=
 ***** probably should batch up for each column family (index)
 **** TODO Write a test that rebuilds the index

@@ -14,10 +14,9 @@
 //! whatever reason the application deems it necessary to rebuild an index, that
 //! can be accomplished by calling the `rebuild()` function.
 //!
-//! The `Document.map()` functions are like redux.js reducers. Every view name
-//! will eventually be passed to every implementation of `Document`, and it is
-//! up to the application to ignore views that are not relevant for the given
-//! document type.
+//! The `Document.map()` functions will eventually receive every view name that
+//! was initially provided to `Database::new()`, and it is up to each `Document`
+//! implementation to ignore views that are not relevant.
 //!
 //! The reason for having both the `Document` and the `ByteMapper` is that we
 //! want to avoid any unnecessary deserialization when updating the secondary
@@ -33,9 +32,10 @@
 //! record primary key, separated by a single null byte. Using a separator is
 //! necessary since the library does not know in advance how long either of
 //! these keys is expected to be, and the index query depends heavily on using
-//! the prefix iterator to speed up the search. If you need to change the
-//! separator, use the `Database.separator()` function. If at some later time
-//! you decide to change the separator, you will need to rebuild the indices.
+//! the prefix iterator to speed up the search. If you want to specify a
+//! different separator, use the `Database.separator()` function when opening
+//! the database. If at some later time you decide to change the separator, you
+//! will need to rebuild the indices.
 
 use failure::{err_msg, Error};
 use rocksdb::{ColumnFamily, DBIterator, IteratorMode, Options, DB};
@@ -315,7 +315,7 @@ impl Database {
     pub fn query(&self, view: &str) -> Result<QueryIterator, Error> {
         let cf = self.ensure_view_built(view)?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start)?;
-        let qiter = QueryIterator::new(&self.db, iter, &self.key_sep);
+        let qiter = QueryIterator::new(&self.db, iter, &self.key_sep, cf);
         Ok(qiter)
     }
 
@@ -329,7 +329,7 @@ impl Database {
     pub fn query_by_key<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<QueryIterator, Error> {
         let cf = self.ensure_view_built(view)?;
         let iter = self.db.prefix_iterator_cf(cf, key.as_ref())?;
-        let qiter = QueryIterator::new_prefix(&self.db, iter, &self.key_sep, key.as_ref());
+        let qiter = QueryIterator::new_prefix(&self.db, iter, &self.key_sep, cf, key.as_ref());
         Ok(qiter)
     }
 
@@ -436,27 +436,37 @@ pub struct QueryIterator<'a> {
     prefix: Option<Vec<u8>>,
     /// Index key separator sequence.
     key_sep: &'a [u8],
+    /// Column family for the index this query is based on.
+    cf: ColumnFamily<'a>,
 }
 
 impl<'a> QueryIterator<'a> {
     /// Construct a new QueryIterator from the DBIterator.
-    fn new(db: &'a DB, dbiter: DBIterator<'a>, sep: &'a [u8]) -> Self {
+    fn new(db: &'a DB, dbiter: DBIterator<'a>, sep: &'a [u8], cf: ColumnFamily<'a>) -> Self {
         Self {
             db,
             dbiter,
             prefix: None,
             key_sep: sep,
+            cf,
         }
     }
 
     /// Construct a new QueryIterator that only returns results whose key
     /// matches the given prefix.
-    fn new_prefix(db: &'a DB, dbiter: DBIterator<'a>, sep: &'a [u8], prefix: &[u8]) -> Self {
+    fn new_prefix(
+        db: &'a DB,
+        dbiter: DBIterator<'a>,
+        sep: &'a [u8],
+        cf: ColumnFamily<'a>,
+        prefix: &[u8],
+    ) -> Self {
         Self {
             db,
             dbiter,
             prefix: Some(prefix.to_owned()),
             key_sep: sep,
+            cf,
         }
     }
 
@@ -482,17 +492,17 @@ impl<'a> QueryIterator<'a> {
         0
     }
 
-    /// Indicate if the given timestamp for an index entry is more recent than
-    /// the "changes" entry for the given primary key.
-    fn is_fresh(&self, key: &[u8], ts: &[u8]) -> bool {
+    /// Indicate if the given timestamp for an index entry is older than the
+    /// "changes" entry for the given primary key (i.e. it is stale).
+    fn is_stale(&self, key: &[u8], ts: &[u8]) -> bool {
         if let Some(cf) = self.db.cf_handle(CHANGES_CF) {
             if let Ok(Some(val)) = self.db.get_cf(cf, key) {
                 let index_ts = read_le_u128(ts);
                 let changed_ts = read_le_u128(&val);
-                return index_ts > changed_ts;
+                return index_ts < changed_ts;
             }
         }
-        true
+        false
     }
 }
 
@@ -516,7 +526,11 @@ impl<'a> Iterator for QueryIterator<'a> {
             let short_key = key[..sep_pos].to_vec();
             let doc_id = key[sep_pos + self.key_sep.len()..].to_vec();
             let ts = value[..16].to_vec();
-            if self.is_fresh(&doc_id, &ts) {
+            if self.is_stale(&doc_id, &ts) {
+                // prune the stale entry so we never see it again
+                // n.b. the result is Ok even if the record never existed
+                let _ = self.db.delete_cf(self.cf, key);
+            } else {
                 // lop off the 16 byte timestamp from the index value
                 let ivalue = value[16..].to_vec();
                 return Some(QueryResult::new(
@@ -713,11 +727,7 @@ mod tests {
         let key = document.key.as_bytes();
         let result = dbase.put(&key, &document);
         assert!(result.is_ok());
-        let result = dbase.query("tags");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 0);
+        assert_eq!(count_index(&dbase, "tags"), 0);
     }
 
     #[test]
@@ -740,11 +750,7 @@ mod tests {
         let key = document.key.as_bytes();
         let result = dbase.put(&key, &document);
         assert!(result.is_ok());
-        let result = dbase.query("");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 0);
+        assert_eq!(count_index(&dbase, ""), 0);
     }
 
     #[test]
@@ -766,11 +772,7 @@ mod tests {
         let key = document.key.as_bytes();
         let result = dbase.put(&key, &document);
         assert!(result.is_ok());
-        let result = dbase.query("");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 0);
+        assert_eq!(count_index(&dbase, ""), 0);
     }
 
     #[test]
@@ -824,19 +826,8 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // querying all tags should return 12
-        let result = dbase.query("tags");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 12);
-
-        // querying by a specific tag: noman
-        let result = dbase.query_by_key("tags", b"noman");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 0);
+        assert_eq!(count_index(&dbase, "tags"), 12);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"noman"), 0);
 
         // querying by a specific tag: cat
         let result = dbase.query_by_key("tags", b"cat");
@@ -939,13 +930,45 @@ mod tests {
         assert!(keys.contains(&String::from("as/1badb002")));
     }
 
+    /// Query the database and return the number of results.
+    fn count_index(dbase: &Database, view: &str) -> usize {
+        let result = dbase.query(view);
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        iter.count()
+    }
+
+    /// Return the number of records matching the query.
+    fn count_index_by_query(dbase: &Database, view: &str, query: &[u8]) -> usize {
+        let result = dbase.query_by_key(view, query);
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        iter.count()
+    }
+
+    /// Return the number of records in the named index without using the
+    /// database query function, which performs compaction.
+    fn count_index_records(db: &DB, view: &str) -> usize {
+        let mut mrview = String::from(VIEW_PREFIX);
+        mrview.push_str(view);
+        let result = db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing column family"));
+        assert!(result.is_ok());
+        let cf = result.unwrap();
+        let result = db.iterator_cf(cf, IteratorMode::Start);
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        iter.count()
+    }
+
     #[test]
     fn query_with_changes() {
         let db_path = "tmp/test/query_with_changes";
         let _ = fs::remove_dir_all(db_path);
         let mut views: Vec<String> = Vec::new();
         views.push("tags".to_owned());
-        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/cafebabe"),
@@ -990,26 +1013,10 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // querying by a specific tag: fur
-        let result = dbase.query_by_key("tags", b"fur");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 1);
-
-        // querying by a specific tag: tail
-        let result = dbase.query_by_key("tags", b"tail");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 2);
-
-        // querying by a specific tag: cat
-        let result = dbase.query_by_key("tags", b"cat");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 2);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"tail"), 2);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"cat"), 2);
+        assert_eq!(count_index_records(dbase.db(), "tags"), 12);
 
         // update a couple of existing records
         let documents = [
@@ -1038,43 +1045,20 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // querying by a specific tag: tail
-        let result = dbase.query_by_key("tags", b"tail");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 3);
+        assert_eq!(count_index_records(dbase.db(), "tags"), 16);
+        // this query should perform a compaction!
+        assert_eq!(count_index(&dbase, "tags"), 12);
+        assert_eq!(count_index_records(dbase.db(), "tags"), 12);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"cat"), 1);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 0);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"fuzz"), 1);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"tail"), 3);
 
-        // querying by a specific tag: cat
-        let result = dbase.query_by_key("tags", b"cat");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 1);
-
-        // querying by a specific tag: fur
-        let result = dbase.query_by_key("tags", b"fur");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 0);
-
-        // querying by a specific tag: fuzz
-        let result = dbase.query_by_key("tags", b"fuzz");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 1);
-
-        // delete an entry, and query again
+        // delete an entry, and query again to perform compaction
         let result = dbase.delete(String::from("as/baadf00d").as_bytes());
         assert!(result.is_ok());
-
-        // querying by a specific tag: mouse
-        let result = dbase.query_by_key("tags", b"mouse");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 0);
+        assert_eq!(count_index(&dbase, "tags"), 9);
+        assert_eq!(count_index_records(dbase.db(), "tags"), 9);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"mouse"), 0);
     }
 }
