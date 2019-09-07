@@ -334,10 +334,12 @@ impl Database {
     }
 
     ///
-    /// Return a reference to the RocksDB instance. This is an escape hatch in
-    /// the event that you need to call a function that is not exposed via this
-    /// wrapper. Beware that interfacing directly with RocksDB means that the
-    /// index is not being updated with respect to those operations.
+    /// Return a reference to the RocksDB instance.
+    ///
+    /// This is an escape hatch in the event that you need to call a function
+    /// that is not exposed via this wrapper. Beware that interfacing directly
+    /// with RocksDB means that the index is not being updated with respect to
+    /// those operations.
     ///
     pub fn db(&self) -> &DB {
         &self.db
@@ -415,8 +417,10 @@ impl Database {
     }
 
     ///
-    /// Query on the given index, returning all results. If the index has not
-    /// yet been built, it will be built prior to returning any results.
+    /// Query on the given index, returning all results.
+    ///
+    /// If the index has not yet been built, it will be built prior to returning
+    /// any results.
     ///
     pub fn query(&self, view: &str) -> Result<QueryIterator, Error> {
         let cf = self.ensure_view_built(view)?;
@@ -427,8 +431,9 @@ impl Database {
 
     ///
     /// Query on the given index, returning those results whose key prefix
-    /// matches the value given. Only those index keys with a matching prefix
-    /// will be returned.
+    /// matches the value given.
+    ///
+    /// Only those index keys with a matching prefix will be returned.
     ///
     /// As with `query()`, if the index has not yet been built, it will be.
     ///
@@ -440,9 +445,10 @@ impl Database {
     }
 
     ///
-    /// Build the named index, replacing the index if it already exists. To
-    /// simply ensure that an index has been built, call `query()`, which will
-    /// not delete the existing index.
+    /// Build the named index, replacing the index if it already exists.
+    ///
+    /// To simply ensure that an index has been built, call `query()`, which
+    /// will not delete the existing index.
     ///
     pub fn rebuild(&self, view: &str) -> Result<(), Error> {
         let mut mrview = String::from(VIEW_PREFIX);
@@ -485,7 +491,7 @@ impl Database {
 
 ///
 /// Return a vector of 16 bytes representing the nanoseconds since the Unix
-/// epoch, useful for as a very precise timestamp.
+/// epoch, useful as a very precise timestamp.
 ///
 fn nanos_since_epoch() -> Vec<u8> {
     let now = SystemTime::now();
@@ -507,11 +513,12 @@ fn read_le_u128(input: &[u8]) -> u128 {
 }
 
 ///
-/// `QueryResult` represents a single result from a query. The `key` is that
-/// which was emitted by the application, and similarly the `value` is whatever
-/// the application emitted along with the key (it will be an empty vector if
-/// the application emitted `None`). The `doc_id` is the primary key of the data
-/// record, a named borrowed from PouchDB.
+/// Represents a single result from a query.
+///
+/// The `key` is that which was emitted by the application, and similarly the
+/// `value` is whatever the application emitted along with the key (it will be
+/// an empty vector if the application emitted `None`). The `doc_id` is the
+/// primary key of the data record, a named borrowed from PouchDB.
 ///
 #[derive(Debug)]
 pub struct QueryResult {
@@ -531,9 +538,9 @@ impl QueryResult {
 }
 
 ///
-/// `QueryIterator` returns the results from a database query as an instance of
-/// `QueryResult`.
-/// 
+/// An `Iterator` returned by the database query functions, yielding instances
+/// of `QueryResult` for each matching index entry.
+///
 /// ```no_run
 /// # use failure::Error;
 /// # use mokuroku::*;
