@@ -57,7 +57,7 @@ use failure::{err_msg, Error};
 use rocksdb::{ColumnFamily, DBIterator, IteratorMode, Options, DB};
 use std::convert::TryInto;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 ///
@@ -271,6 +271,8 @@ impl<'a> Emitter<'a> {
 pub struct Database {
     /// RocksDB instance.
     db: DB,
+    /// Path to the database files.
+    db_path: PathBuf,
     /// Collection of index ("view") names.
     views: Vec<String>,
     /// Given a document key/value pair, emits index key/value pairs.
@@ -315,6 +317,7 @@ impl Database {
         let db = DB::open(&db_opts, db_path)?;
         Ok(Self {
             db,
+            db_path: db_path.to_path_buf(),
             views: myviews,
             mapper,
             key_sep: vec![0],
@@ -523,6 +526,37 @@ impl Database {
         }
         if let Some(idx) = self.views.iter().position(|v| v == view) {
             self.views.swap_remove(idx);
+        }
+        Ok(())
+    }
+
+    ///
+    /// Scan for column families that are not associated with this database
+    /// instance, and yet have the "mrview-" prefix, removing any that are
+    /// found.
+    ///
+    pub fn index_cleanup(&self) -> Result<(), Error> {
+        // convert the view names to column family names
+        let view_names: Vec<String> = self
+            .views
+            .iter()
+            .map(|v| {
+                let mut mrview = String::from(VIEW_PREFIX);
+                mrview.push_str(v);
+                mrview
+            })
+            .collect();
+        // gather all of the column families in the database
+        let opts = Options::default();
+        let names = DB::list_cf(&opts, &self.db_path)?;
+        // find those that are not configured for this instance and remove them
+        for unknown in names
+            .iter()
+            .filter(|cf| view_names.iter().all(|v| v != *cf))
+        {
+            if unknown.starts_with(VIEW_PREFIX) {
+                self.db.drop_cf(unknown)?;
+            }
         }
         Ok(())
     }
@@ -1351,5 +1385,81 @@ mod tests {
         assert!(result.is_ok());
         let result = dbase.delete_index("nonesuch");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn index_cleanup() {
+        let db_path = "tmp/test/index_cleanup";
+        let _ = fs::remove_dir_all(db_path);
+        // only mention the one view, so we can clean up the other one
+        let views = vec!["tags".to_owned()];
+        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let documents = [
+            Asset {
+                key: String::from("as/blackcat"),
+                location: String::from("hallows"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("black"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/blackdog"),
+                location: String::from("moors"),
+                tags: vec![
+                    String::from("dog"),
+                    String::from("black"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitecat"),
+                location: String::from("upstairs"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("ears"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitemouse"),
+                location: String::from("attic"),
+                tags: vec![
+                    String::from("mouse"),
+                    String::from("white"),
+                    String::from("tail"),
+                ],
+            },
+        ];
+        for document in documents.iter() {
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, document);
+            assert!(result.is_ok());
+        }
+
+        // query to prime both the known and ad hoc indices
+        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
+        assert_eq!(count_index_by_query(&dbase, "location", b"attic"), 1);
+
+        // create one of our own column families to make sure the library does
+        // _not_ remove it by mistake
+        let opts = Options::default();
+        let myview = "mycolumnfamily";
+        let result = dbase.db().create_cf(myview, &opts);
+        assert!(result.is_ok());
+        let cf = result.unwrap();
+        let result = dbase.db().put_cf(cf, b"mykey", b"myvalue");
+        assert!(result.is_ok());
+
+        // clean up the unknown index and verify it is gone
+        let result = dbase.index_cleanup();
+        assert!(result.is_ok());
+        let opt = dbase.db().cf_handle("mrview-tags");
+        assert!(opt.is_some());
+        let opt = dbase.db().cf_handle("mrview-location");
+        assert!(opt.is_none());
+        let opt = dbase.db().cf_handle(myview);
+        assert!(opt.is_some());
     }
 }

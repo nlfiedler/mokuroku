@@ -3,9 +3,6 @@
 *** Development
 **** TODO Write the index key/value pairs received in =put()= using a =WriteBatch=
 ***** probably should batch up for each column family (index)
-**** TODO Clean up stale indices
-***** Called by the application in an ad hoc fashion
-***** Delete any column families with our prefix that do not match any registered view
 **** TODO Support the =rocksdb::WriteBatch= atomic commit feature
 **** TODO Once =rust-rocksdb= exposes the sequence number, use that instead of timestamp
 **** TODO Should have a version number in the database so crate can know to rebuild indices

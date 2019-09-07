@@ -9,6 +9,7 @@ This file follows the convention described at
 ### Added
 - `query_exact()` to return results matching the entire index key.
 - `delete_index()` to completely remove an index from the database.
+- `index_cleanup()` to remove unknown mokuroku column families.
 
 ## [0.2.0] - 2019-09-07
 ### Changed
