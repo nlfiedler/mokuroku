@@ -631,9 +631,10 @@ impl<'a> QueryIterator<'a> {
             return 0;
         }
         //
-        // Should use Knuth–Morris–Pratt string-searching algorithm to find the
-        // position for multi-byte separators. It is vastly more complicated,
-        // but it would be faster when done many times over.
+        // Could use Knuth–Morris–Pratt string-searching algorithm to find the
+        // position for multi-byte separators. However, it is complicated and
+        // would pay off if the "text string" were long, but the composite keys
+        // are fairly short, and the index keys are likely even shorter.
         //
         for (idx, win) in key.windows(self.key_sep.len()).enumerate() {
             if win == self.key_sep {
@@ -811,6 +812,8 @@ mod tests {
                 for tag in &self.tags {
                     emitter.emit(tag.as_bytes(), Some(&self.location.as_bytes()))?;
                 }
+            } else if view == "location" {
+                emitter.emit(self.location.as_bytes(), None)?;
             }
             Ok(())
         }
@@ -1259,5 +1262,65 @@ mod tests {
         assert_eq!(count_index_exact(&dbase, "tags", b"cat"), 1);
         assert_eq!(count_index_exact(&dbase, "tags", b"orange"), 1);
         assert_eq!(count_index_exact(&dbase, "tags", b"tail"), 1);
+    }
+
+    #[test]
+    fn index_rebuild() {
+        let db_path = "tmp/test/index_rebuild";
+        let _ = fs::remove_dir_all(db_path);
+        // only mention the one view, we will build the other manually
+        let views = vec!["tags".to_owned()];
+        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let documents = [
+            Asset {
+                key: String::from("as/blackcat"),
+                location: String::from("hallows"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("black"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/blackdog"),
+                location: String::from("moors"),
+                tags: vec![
+                    String::from("dog"),
+                    String::from("black"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitecat"),
+                location: String::from("upstairs"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("ears"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitemouse"),
+                location: String::from("attic"),
+                tags: vec![
+                    String::from("mouse"),
+                    String::from("white"),
+                    String::from("tail"),
+                ],
+            },
+        ];
+        for document in documents.iter() {
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, document);
+            assert!(result.is_ok());
+        }
+
+        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
+        let result = dbase.rebuild("tags");
+        assert!(result.is_ok());
+        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
+        let result = dbase.rebuild("location");
+        assert!(result.is_ok());
+        assert_eq!(count_index_by_query(&dbase, "location", b"attic"), 1);
     }
 }
