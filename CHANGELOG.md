@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+### Added
+- `query_exact()` to return results matching the entire index key.
+
 ## [0.2.0] - 2019-09-07
 ### Changed
 - Detect and prune stale index entries on query.

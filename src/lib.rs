@@ -445,6 +445,25 @@ impl Database {
     }
 
     ///
+    /// Query on the given index, returning those results whose key matches
+    /// exactly the value given.
+    ///
+    /// Only those index entries with matching keys will be returned.
+    ///
+    /// As with `query()`, if the index has not yet been built, it will be.
+    ///
+    pub fn query_exact<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<QueryIterator, Error> {
+        let cf = self.ensure_view_built(view)?;
+        let len = key.as_ref().len() + self.key_sep.len();
+        let mut sep_key: Vec<u8> = Vec::with_capacity(len);
+        sep_key.extend_from_slice(&key.as_ref()[..]);
+        sep_key.extend_from_slice(&self.key_sep);
+        let iter = self.db.prefix_iterator_cf(cf, &sep_key)?;
+        let qiter = QueryIterator::new_prefix(&self.db, iter, &self.key_sep, cf, &sep_key);
+        Ok(qiter)
+    }
+
+    ///
     /// Build the named index, replacing the index if it already exists.
     ///
     /// To simply ensure that an index has been built, call `query()`, which
@@ -1079,6 +1098,14 @@ mod tests {
         iter.count()
     }
 
+    /// Return the number of records exactly matching the query.
+    fn count_index_exact(dbase: &Database, view: &str, query: &[u8]) -> usize {
+        let result = dbase.query_exact(view, query);
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        iter.count()
+    }
+
     /// Return the number of records in the named index without using the
     /// database query function, which performs compaction.
     fn count_index_records(db: &DB, view: &str) -> usize {
@@ -1192,5 +1219,45 @@ mod tests {
         assert_eq!(count_index(&dbase, "tags"), 9);
         assert_eq!(count_index_records(dbase.db(), "tags"), 9);
         assert_eq!(count_index_by_query(&dbase, "tags", b"mouse"), 0);
+    }
+
+    #[test]
+    fn query_exact() {
+        let db_path = "tmp/test/query_exact";
+        let _ = fs::remove_dir_all(db_path);
+        let views = vec!["tags".to_owned()];
+        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let documents = [
+            Asset {
+                key: String::from("as/onecat"),
+                location: String::from("tree"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("orange"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/twocats"),
+                location: String::from("backyard"),
+                tags: vec![
+                    String::from("cats"),
+                    String::from("oranges"),
+                    String::from("tails"),
+                ],
+            },
+        ];
+        for document in documents.iter() {
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, document);
+            assert!(result.is_ok());
+        }
+
+        assert_eq!(count_index_by_query(&dbase, "tags", b"cat"), 2);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"cats"), 1);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"tail"), 2);
+        assert_eq!(count_index_exact(&dbase, "tags", b"cat"), 1);
+        assert_eq!(count_index_exact(&dbase, "tags", b"orange"), 1);
+        assert_eq!(count_index_exact(&dbase, "tags", b"tail"), 1);
     }
 }

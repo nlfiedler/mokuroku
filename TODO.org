@@ -1,7 +1,6 @@
 * mokuroku
 ** Implementation
 *** Development
-**** TODO May want an ~exact~ query option, otherwise =cat= will match =cats=
 **** TODO Write the index key/value pairs received in =put()= using a =WriteBatch=
 ***** probably should batch up for each column family (index)
 **** TODO Write a test that rebuilds the index
