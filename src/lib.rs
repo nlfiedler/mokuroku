@@ -620,6 +620,13 @@ impl<'a> QueryIterator<'a> {
     /// Indicate if the given timestamp for an index entry is older than the
     /// "changes" entry for the given primary key (i.e. it is stale).
     fn is_stale(&self, key: &[u8], ts: &[u8]) -> bool {
+        //
+        // Caching: could use a bloom filter to avoid reading from the database
+        // multiple times for the same primary key. However, that is likely to
+        // be overkill considering the number of keys emitted for a single data
+        // record is going to be low. Even just a simple Mutex<Option> of the
+        // most recent stale primary key might be a waste of effort.
+        //
         if let Some(cf) = self.db.cf_handle(CHANGES_CF) {
             if let Ok(Some(val)) = self.db.get_cf(cf, key) {
                 let index_ts = read_le_u128(ts);
