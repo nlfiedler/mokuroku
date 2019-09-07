@@ -2,31 +2,47 @@
 // Copyright (c) 2019 Nathan Fiedler
 //
 
-//! Create an instance of `Database`, much like you would with `rocksdb::DB`.
-//! Provide the path to the database files, the set of view names to maintain,
-//! and a `ByteMapper` that will assist in building indices from existing data.
-//! See the README and `examples` directory for examples.
+//! ## Overview
+//!
+//! This crate will build and maintain a secondary index within RocksDB, similar
+//! to what [PouchDB](https://pouchdb.com) does for LevelDB. The index keys and
+//! optional values are provided by your application. Once an index has been
+//! defined, queries for all entries, or those whose keys match a given prefix,
+//! can be performed. The index is kept up-to-date as data records, the data
+//! your application is storing in the database, are changed and/or deleted.
+//!
+//! ## Usage
+//!
+//! Create an instance of `Database` much like you would with `rocksdb::DB`.
+//! Provide the path to the database files, the set of indices to maintain
+//! (often referred to as _views_), and a `ByteMapper` that will assist in
+//! building indices from existing data.
+//!
+//! Below is a very brief example. See the README and `examples` directory for
+//! additional examples.
+//!
+//! ```no_run
+//! # use failure::Error;
+//! # use mokuroku::*;
+//! # use std::path::Path;
+//! fn mapper(key: &[u8], value: &[u8], view: &str, emitter: &Emitter) -> Result<(), Error> {
+//!     // ... call emitter.emit() with index keys and optional values
+//!     Ok(())
+//! }
+//! let db_path = "my_database";
+//! let views = vec!["tags".to_owned()];
+//! let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+//! ```
+//!
+//! ## Data Model
 //!
 //! The secondary indices are built when `Database.query()` is called and the
 //! corresponding column family is missing. Knowing this, an application may
 //! want to open the database and subsequently call `query()` for every view.
 //! This will cause the index to be built based on the existing data. If for
 //! whatever reason the application deems it necessary to rebuild an index, that
-//! can be accomplished by calling the `rebuild()` function.
-//!
-//! The `Document.map()` functions will eventually receive every view name that
-//! was initially provided to `Database::new()`, and it is up to each `Document`
-//! implementation to ignore views that are not relevant.
-//!
-//! The reason for having both the `Document` and the `ByteMapper` is that we
-//! want to avoid any unnecessary deserialization when updating the secondary
-//! index. When putting a `Document` in the database, there is no need to
-//! deserialize it, so the `map()` will be called on it with every available
-//! view. However, in the case of a view being created from existing data, the
-//! library must deserialize every record in the default column family, and that
-//! is where the `ByteMapper` comes in -- it will recognize the key and/or value
-//! and perform the appropriate deserialization (likely using an implementation
-//! of `Document`) and invoke the provided `Emitter` with index values.
+//! can be accomplished by calling the `rebuild()` function. When building an
+//! index, the library will invoke the application's `ByteMapper` function.
 //!
 //! **N.B.** The index key emitted by the application is combined with the data
 //! record primary key, separated by a single null byte. Using a separator is
@@ -45,19 +61,65 @@ use std::path::Path;
 use std::time::SystemTime;
 
 ///
-/// `Document` defines a few operations required for building the index. Any
-/// data that should contribute to an index should be represented by a type that
-/// implements this trait, and be stored in the database using the `Database`
-/// wrapper method `put()`.
+/// `Document` defines operations required for building the index.
+///
+/// Any data that should contribute to an index should be represented by a type
+/// that implements this trait, and be stored in the database using the
+/// `Database` wrapper method `put()`.
 ///
 /// The primary reason for this trait is that when `put()` is called with an
 /// instance of `Document`, there is no need to deserialize the value when
-/// calling `map()`, since it is already in its natural format.
+/// calling `map()`, since it is already in its natural form. The `map()`
+/// function will eventually receive every view name that was initially provided
+/// to `Database::new()`, and it is up to each `Document` implementation to
+/// ignore views that are not relevant.
+///
+/// This example is using the [serde](https://crates.io/crates/serde) crate,
+/// which provides the `Serialize` and `Deserialize` derivations.
+///
+/// ```no_run
+/// # use failure::Error;
+/// # use mokuroku::*;
+/// # use serde::{Deserialize, Serialize};
+/// # use std::str;
+/// #[derive(Serialize, Deserialize)]
+/// struct Asset {
+///     #[serde(skip)]
+///     key: String,
+///     location: String,
+///     tags: Vec<String>,
+/// }
+///
+/// impl Document for Asset {
+///     fn from_bytes(key: &[u8], value: &[u8]) -> Result<Self, Error> {
+///         let mut serde_result: Asset = serde_cbor::from_slice(value)?;
+///         serde_result.key = str::from_utf8(key)?.to_owned();
+///         Ok(serde_result)
+///     }
+///
+///     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+///         let encoded: Vec<u8> = serde_cbor::to_vec(self)?;
+///         Ok(encoded)
+///     }
+///
+///     fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error> {
+///         if view == "tags" {
+///             for tag in &self.tags {
+///                 emitter.emit(tag.as_bytes(), Some(&self.location.as_bytes()))?;
+///             }
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
 ///
 pub trait Document: Sized {
     ///
-    /// Deserializes a sequence of bytes to return a value of this type. The key
-    /// is provided in case it is required for proper deserialization.
+    /// Deserializes a sequence of bytes to return a value of this type.
+    ///
+    /// The key is provided in case it is required for proper deserialization.
+    /// For example, the document may be deserialized from the raw value, and
+    /// then the unique identifier copied from the raw key.
     ///
     fn from_bytes(key: &[u8], value: &[u8]) -> Result<Self, Error>;
     ///
@@ -65,30 +127,74 @@ pub trait Document: Sized {
     ///
     fn to_bytes(&self) -> Result<Vec<u8>, Error>;
     ///
-    /// Map a value to zero or more index key/value pairs, as passed to the
-    /// given emitter instance.
+    /// Map this document to zero or more index key/value pairs.
     ///
     fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error>;
 }
 
 ///
+/// Responsible for emitting index key/value pairs for any given data record.
+///
+/// Arguments: data record key, data record value, view name, emitter
+///
 /// The application implements a function of this type and passes it to the
-/// database constructor. It will be called with the key and value for every
-/// record in the database and is expected to invoke the `Emitter` to generate
-/// index values. This function is necessary for the building of an index where
-/// none exists. The library will read every record in the default column
-/// family, invoking this mapper with that data.
+/// database constructor. When the library is building an index, this function
+/// will be called with the key and value for every record in the default column
+/// family. The mapping function is expected to invoke the `Emitter` to generate
+/// the index key and value pairs. It is up to the mapper to recognize the key
+/// and/or value of the data record, perform the appropriate deserialization,
+/// and then invoke the provided `Emitter` with index values.
 ///
-/// The application could, for instance, use information in the key to determine
-/// how to deserialize the value into a `Document`, and then invoke the `map()`
-/// function on that `Document`.
+/// In this example, the `LenVal` and `Asset` types are implementations of
+/// `Document`, making it a trivial matter to deserialize the database record
+/// and emit index keys. This mapper uses the key prefix as a means of knowing
+/// which `Document` implementation to use.
 ///
-/// Arguments: database key, database value, view name, emitter
+/// ```no_run
+/// # use failure::Error;
+/// # use mokuroku::*;
+/// # struct Asset {}
+/// # impl Document for Asset {
+/// #     fn from_bytes(key: &[u8], value: &[u8]) -> Result<Self, Error> {
+/// #         Ok(Asset {})
+/// #     }
+/// #     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+/// #         Ok(Vec::new())
+/// #     }
+/// #     fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error> {
+/// #         Ok(())
+/// #     }
+/// # }
+/// # struct LenVal {}
+/// # impl Document for LenVal {
+/// #     fn from_bytes(key: &[u8], value: &[u8]) -> Result<Self, Error> {
+/// #         Ok(LenVal {})
+/// #     }
+/// #     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+/// #         Ok(Vec::new())
+/// #     }
+/// #     fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error> {
+/// #         Ok(())
+/// #     }
+/// # }
+/// fn mapper(key: &[u8], value: &[u8], view: &str, emitter: &Emitter) -> Result<(), Error> {
+///     if &key[..3] == b"lv/".as_ref() {
+///         let doc = LenVal::from_bytes(key, value)?;
+///         doc.map(view, emitter)?;
+///     } else if &key[..3] == b"as/".as_ref() {
+///         let doc = Asset::from_bytes(key, value)?;
+///         doc.map(view, emitter)?;
+///     }
+///     Ok(())
+/// }
+/// ```
 ///
 pub type ByteMapper = Box<dyn Fn(&[u8], &[u8], &str, &Emitter) -> Result<(), Error>>;
 
 ///
 /// The `Emitter` receives index key/value pairs from the application.
+///
+/// See the `Document` trait for an example.
 ///
 pub struct Emitter<'a> {
     /// RocksDB reference
@@ -150,17 +256,17 @@ impl<'a> Emitter<'a> {
 /// An instance of the database for reading and writing records to disk. This
 /// wrapper manages the secondary indices defined by the application.
 ///
-/// The secondary indices, referred to as "views", will be stored in RocksDB
-/// column families whose names are based on the names given in the constructor,
-/// with a prefix of `mrview-` to avoid conflicting with any column families
-/// managed by the application. The library will manage these column families as
-/// needed when (re)building the indices.
+/// The secondary indices, often referred to as _views_, will be stored in
+/// RocksDB column families whose names are based on the names given in the
+/// constructor, with a prefix of `mrview-` to avoid conflicting with any column
+/// families managed by the application. The library will manage these column
+/// families as needed when (re)building the indices.
 ///
 /// In addition to the names of the views, the application must provide a
 /// mapping function that works with key/value pairs as slices of bytes. This is
-/// called when building an index by reading every record in the database, in
-/// which the library does not have an inferred `Document` implementation to
-/// deserialize the record.
+/// called when building an index by reading every record in the default column
+/// family, in which the library does not have an inferred `Document`
+/// implementation to deserialize the record.
 ///
 pub struct Database {
     /// RocksDB instance.
@@ -403,8 +509,9 @@ fn read_le_u128(input: &[u8]) -> u128 {
 ///
 /// `QueryResult` represents a single result from a query. The `key` is that
 /// which was emitted by the application, and similarly the `value` is whatever
-/// the application emitted along with the key. The `doc_id` is the primary key
-/// of the data record.
+/// the application emitted along with the key (it will be an empty vector if
+/// the application emitted `None`). The `doc_id` is the primary key of the data
+/// record, a named borrowed from PouchDB.
 ///
 #[derive(Debug)]
 pub struct QueryResult {
@@ -426,6 +533,24 @@ impl QueryResult {
 ///
 /// `QueryIterator` returns the results from a database query as an instance of
 /// `QueryResult`.
+/// 
+/// ```no_run
+/// # use failure::Error;
+/// # use mokuroku::*;
+/// # use std::path::Path;
+/// # fn mapper(key: &[u8], value: &[u8], view: &str, emitter: &Emitter) -> Result<(), Error> {
+/// #     Ok(())
+/// # }
+/// let db_path = "tmp/assets/database";
+/// let views = vec!["tags".to_owned()];
+/// let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+/// let result = dbase.query_by_key("tags", b"cat");
+/// let iter = result.unwrap();
+/// for result in iter {
+///     let doc_id = std::str::from_utf8(&result.doc_id).unwrap().to_owned();
+///     println!("query result key: {:}", doc_id);
+/// }
+/// ```
 ///
 pub struct QueryIterator<'a> {
     /// Reference to Database for fetching records.
@@ -589,8 +714,7 @@ mod tests {
     fn put_get_delete() {
         let db_path = "tmp/test/put_get_delete";
         let _ = fs::remove_dir_all(db_path);
-        let mut views: Vec<String> = Vec::new();
-        views.push("value".to_owned());
+        let views = vec!["value".to_owned()];
         let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = LenVal {
             key: String::from("lv/deadbeef"),
@@ -674,8 +798,7 @@ mod tests {
     fn asset_view_creation() {
         let db_path = "tmp/test/asset_view_creation";
         let _ = fs::remove_dir_all(db_path);
-        let mut views: Vec<String> = Vec::new();
-        views.push("tags".to_owned());
+        let views = vec!["tags".to_owned()];
         let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             key: String::from("as/cafebabe"),
@@ -711,8 +834,7 @@ mod tests {
     fn no_view_creation() {
         let db_path = "tmp/test/no_view_creation";
         let _ = fs::remove_dir_all(db_path);
-        let mut views: Vec<String> = Vec::new();
-        views.push("tags".to_owned());
+        let views = vec!["tags".to_owned()];
         let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             // intentionally using a key that does not match anything in our mapper
@@ -734,9 +856,8 @@ mod tests {
     fn empty_view_name() {
         let db_path = "tmp/test/empty_view_name";
         let _ = fs::remove_dir_all(db_path);
-        let mut views: Vec<String> = Vec::new();
         // intentionally passing an empty view name
-        views.push("".to_owned());
+        let views = vec!["".to_owned()];
         let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             key: String::from("as/cafebabe"),
@@ -779,8 +900,7 @@ mod tests {
     fn query_by_key() {
         let db_path = "tmp/test/query_by_key";
         let _ = fs::remove_dir_all(db_path);
-        let mut views: Vec<String> = Vec::new();
-        views.push("tags".to_owned());
+        let views = vec!["tags".to_owned()];
         let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
@@ -865,8 +985,7 @@ mod tests {
         // query by key with a multi-byte key separator sequence
         let db_path = "tmp/test/query_by_key_separator";
         let _ = fs::remove_dir_all(db_path);
-        let mut views: Vec<String> = Vec::new();
-        views.push("tags".to_owned());
+        let views = vec!["tags".to_owned()];
         let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let sep = vec![0xff, 0xff, 0xff];
         let dbase = dbase.separator(&sep);
@@ -966,8 +1085,7 @@ mod tests {
     fn query_with_changes() {
         let db_path = "tmp/test/query_with_changes";
         let _ = fs::remove_dir_all(db_path);
-        let mut views: Vec<String> = Vec::new();
-        views.push("tags".to_owned());
+        let views = vec!["tags".to_owned()];
         let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {

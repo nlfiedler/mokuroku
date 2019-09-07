@@ -22,7 +22,7 @@
 ****** ts would be nanos since epoch, a 16 byte value
 ****** =let ts: u128 = SystemTime.duration_since(std::time::UNIX_EPOCH)?.as_nanos();=
 ***** on update, store timestamp in index value (first 16 bytes)
-**** TODO Add examples to the various API docs
+**** DONE Add examples to the various API docs
 **** TODO Stale entry detection in iterator should cache results
 ***** perhaps maintain a bloom/cuckoo filter of updated primary keys
 ****** https://github.com/seiflotfy/rust-cuckoofilter

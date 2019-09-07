@@ -13,7 +13,7 @@ querying the index based on tags.
 Build and run the optimized version so the chunker performs a bit faster.
 
 ```shell
-$ cargo run --release
+$ cargo run
 ```
 
 The demo will create a database, populate it with some records, perform some

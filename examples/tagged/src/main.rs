@@ -57,8 +57,7 @@ fn main() {
     // set up the database and populate it with stuff
     let db_path = "tmp/assets/database";
     let _ = fs::remove_dir_all(db_path);
-    let mut views: Vec<String> = Vec::new();
-    views.push("tags".to_owned());
+    let views = vec!["tags".to_owned()];
     let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
     let documents = [
         Asset {
@@ -114,8 +113,7 @@ fn main() {
     println!("querying for 'cat'...");
     let result = dbase.query_by_key("tags", b"cat");
     let iter = result.unwrap();
-    let results: Vec<QueryResult> = iter.collect();
-    for result in results {
+    for result in iter {
         let doc_id = str::from_utf8(&result.doc_id).unwrap().to_owned();
         println!("query result key: {:}", doc_id);
     }

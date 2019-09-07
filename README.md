@@ -126,7 +126,7 @@ operations that should not affect any index, the application is free to get a
 direct reference to `DB` using the `Database.db()` function.
 
 At startup, the application will create an instance of `Database` and provide
-three pieces of information.
+three arguments.
 
 1. Path to the database files, just as with `DB::open()`
 1. Collection of index names that will be passed to `Document.map()`
@@ -155,8 +155,7 @@ calls to `query()`.
 
 The application defines the database record format; this library does not put
 any restrictions on the format of the keys or values. That is a big part of why
-the usage is slightly more complicated. This is _not_ PouchDB and the documents
-are _not_ all JSON formatted blobs.
+the usage is slightly more complicated then something like PouchDB.
 
 The library maintains the secondary indices in separate column families, whose
 names start with `mrview-` to avoid collision with any column family that the
