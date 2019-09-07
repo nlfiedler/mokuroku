@@ -8,6 +8,7 @@ This file follows the convention described at
 ## [Unreleased]
 ### Added
 - `query_exact()` to return results matching the entire index key.
+- `delete_index()` to completely remove an index from the database.
 
 ## [0.2.0] - 2019-09-07
 ### Changed

@@ -506,6 +506,26 @@ impl Database {
         }
         Ok(())
     }
+
+    ///
+    /// Delete the named index from the database.
+    ///
+    /// If the column family for the named view exists, it will be dropped.
+    /// Likewise, the entry will be removed from the set of view names defined
+    /// in this instance, such that it will no longer be passed to the
+    /// `Document.map()` functions.
+    ///
+    pub fn delete_index(&mut self, view: &str) -> Result<(), Error> {
+        let mut mrview = String::from(VIEW_PREFIX);
+        mrview.push_str(view);
+        if let Some(_cf) = self.db.cf_handle(&mrview) {
+            self.db.drop_cf(&mrview)?;
+        }
+        if let Some(idx) = self.views.iter().position(|v| v == view) {
+            self.views.swap_remove(idx);
+        }
+        Ok(())
+    }
 }
 
 ///
@@ -983,7 +1003,7 @@ mod tests {
         }
 
         assert_eq!(count_index(&dbase, "tags"), 12);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"noman"), 0);
+        assert_eq!(count_index_by_query(&dbase, "tags", b"nonesuch"), 0);
 
         // querying by a specific tag: cat
         let result = dbase.query_by_key("tags", b"cat");
@@ -1265,12 +1285,12 @@ mod tests {
     }
 
     #[test]
-    fn index_rebuild() {
-        let db_path = "tmp/test/index_rebuild";
+    fn index_rebuild_delete() {
+        let db_path = "tmp/test/index_rebuild_delete";
         let _ = fs::remove_dir_all(db_path);
         // only mention the one view, we will build the other manually
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/blackcat"),
@@ -1315,6 +1335,7 @@ mod tests {
             assert!(result.is_ok());
         }
 
+        // query, rebuild, query again
         assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
         let result = dbase.rebuild("tags");
         assert!(result.is_ok());
@@ -1322,5 +1343,13 @@ mod tests {
         let result = dbase.rebuild("location");
         assert!(result.is_ok());
         assert_eq!(count_index_by_query(&dbase, "location", b"attic"), 1);
+
+        // delete the indices for good measure
+        let result = dbase.delete_index("tags");
+        assert!(result.is_ok());
+        let result = dbase.delete_index("location");
+        assert!(result.is_ok());
+        let result = dbase.delete_index("nonesuch");
+        assert!(result.is_ok());
     }
 }

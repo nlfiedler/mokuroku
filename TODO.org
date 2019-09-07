@@ -3,8 +3,6 @@
 *** Development
 **** TODO Write the index key/value pairs received in =put()= using a =WriteBatch=
 ***** probably should batch up for each column family (index)
-**** TODO Add function to delete an index
-***** remove corresponding entry from =views= list
 **** TODO Clean up stale indices
 ***** Called by the application in an ad hoc fashion
 ***** Delete any column families with our prefix that do not match any registered view
