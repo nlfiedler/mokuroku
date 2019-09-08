@@ -79,12 +79,21 @@ fn main() {
             ],
         },
         Asset {
-            key: String::from("asset/whitecat"),
+            key: String::from("asset/whitecatears"),
             location: String::from("hakone"),
             tags: vec![
                 String::from("cat"),
                 String::from("white"),
                 String::from("ears"),
+            ],
+        },
+        Asset {
+            key: String::from("asset/whitecattail"),
+            location: String::from("hakone"),
+            tags: vec![
+                String::from("cat"),
+                String::from("white"),
+                String::from("tail"),
             ],
         },
         Asset {
@@ -104,16 +113,22 @@ fn main() {
     }
 
     // querying all tags should return 12
-    let result = dbase.query("tags");
-    let iter = result.unwrap();
-    let results: Vec<QueryResult> = iter.collect();
+    let results: Vec<QueryResult> = dbase.query("tags").unwrap().collect();
     println!("There are {:} tags in the index.", results.len());
 
     // querying by a specific tag: cat
     println!("querying for 'cat'...");
-    let result = dbase.query_by_key("tags", b"cat");
-    let iter = result.unwrap();
-    for result in iter {
+    let results = dbase.query_by_key("tags", b"cat").unwrap();
+    for result in results {
+        let doc_id = str::from_utf8(&result.doc_id).unwrap().to_owned();
+        println!("query result key: {:}", doc_id);
+    }
+
+    // query for rows that have all matching tags
+    println!("querying for rows that have 'cat' and 'white'...");
+    let keys: Vec<&[u8]> = vec![b"cat", b"white"];
+    let results = dbase.query_all_keys("tags", &keys).unwrap();
+    for result in results.iter() {
         let doc_id = str::from_utf8(&result.doc_id).unwrap().to_owned();
         println!("query result key: {:}", doc_id);
     }

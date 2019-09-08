@@ -70,8 +70,8 @@ index using specific key values.
 
 This code snippet is lifted from the aforementioned example. It shows the most
 basic usage of opening the database, adding records, and querying an index.
-Examples of the functions for generating the index are in `examples/tagged`
-directory.
+Examples of the functions for generating the index keys and values are in
+`examples/tagged` directory.
 
 ```rust
 let db_path = "my_database";
