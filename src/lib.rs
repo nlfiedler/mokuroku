@@ -449,11 +449,14 @@ impl Database {
     }
 
     ///
-    /// Query the index for results that have all of the given keys.
+    /// Query the index for documents that have all of the given keys.
+    ///
+    /// Unlike the other query functions, this one returns a single result per
+    /// document for each document that emitted all of the specified keys.
     ///
     /// This function is potentially memory intensive as it will query the index
     /// for each given key, combining all of the results in memory, and then
-    /// filtering out the results that lack all of the keys. As such this
+    /// filtering out the documents that lack all of the keys. As such this
     /// returns a vector versus an iterator.
     ///
     pub fn query_all_keys<I, N>(&self, view: &str, keys: I) -> Result<Vec<QueryResult>, Error>
@@ -471,7 +474,7 @@ impl Database {
             }
             key_count += 1;
         }
-        // reduce the results to those that have all of the given keys
+        // reduce the documents to those that have all of the given keys
         let mut key_counts: HashMap<Box<[u8]>, usize> = HashMap::new();
         query_results.iter().for_each(|r| {
             if let Some(value) = key_counts.get_mut(r.doc_id.as_ref()) {
@@ -484,7 +487,7 @@ impl Database {
             .drain(..)
             .filter(|r| key_counts[r.doc_id.as_ref()] == key_count)
             .collect();
-        // remove duplicate rows by sorting on the document identifier
+        // remove duplicate documents by sorting on the primary key
         matching_rows.sort_unstable_by(|a, b| a.doc_id.as_ref().cmp(b.doc_id.as_ref()));
         matching_rows.dedup_by(|a, b| a.doc_id.as_ref() == b.doc_id.as_ref());
         Ok(matching_rows)

@@ -75,8 +75,7 @@ Examples of the functions for generating the index keys and values are in
 
 ```rust
 let db_path = "my_database";
-let mut views: Vec<String> = Vec::new();
-views.push("tags".to_owned());
+let views = vec!["tags".to_owned()];
 let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
 let documents = [
     Asset {
@@ -95,7 +94,7 @@ for document in documents.iter() {
     let _ = dbase.put(&key, document);
 }
 
-// querying by a specific tag: cat
+// querying the "tags" index for keyword "cat"
 let result = dbase.query_by_key("tags", b"cat");
 let iter = result.unwrap();
 let results: Vec<QueryResult> = iter.collect();
