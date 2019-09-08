@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [0.3.0] - 2019-09-08
 ### Added
 - `query_exact()` to return results matching the entire index key.
 - `query_all_keys()` to return results that have all of the given keys.
