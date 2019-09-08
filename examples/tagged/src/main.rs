@@ -113,8 +113,8 @@ fn main() {
     }
 
     // querying all tags should return 12
-    let results: Vec<QueryResult> = dbase.query("tags").unwrap().collect();
-    println!("There are {:} tags in the index.", results.len());
+    let count: usize = dbase.query("tags").unwrap().count();
+    println!("There are {:} tags in the index.", count);
 
     // querying by a specific tag: cat
     println!("querying for 'cat'...");
