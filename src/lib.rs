@@ -513,6 +513,41 @@ impl Database {
     }
 
     ///
+    /// Query on the given index, returning the number of rows whose key prefix
+    /// matches the value given.
+    ///
+    /// As with `query()`, if the index has not yet been built, it will be.
+    ///
+    pub fn count_by_key<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<usize, Error> {
+        // For the time being this is nothing more than query with a call to
+        // count(), but perhaps some day it would be possible to avoid some
+        // unnecessary work when we only want a single count.
+        let qiter = self.query_by_key(view, key)?;
+        Ok(qiter.count())
+    }
+
+    ///
+    /// Query the index and return the number of occurrences of all keys.
+    ///
+    /// The map keys are the index keys, and the map values are the number of
+    /// times each key was encountered in the index.
+    ///
+    /// As with `query()`, if the index has not yet been built, it will be.
+    ///
+    pub fn count_all_keys(&self, view: &str) -> Result<HashMap<Box<[u8]>, usize>, Error> {
+        let iter = self.query(view)?;
+        let mut key_counts: HashMap<Box<[u8]>, usize> = HashMap::new();
+        iter.for_each(|r| {
+            if let Some(value) = key_counts.get_mut(r.key.as_ref()) {
+                *value += 1;
+            } else {
+                key_counts.insert(r.key.clone(), 1);
+            }
+        });
+        Ok(key_counts)
+    }
+
+    ///
     /// Build the named index, replacing the index if it already exists.
     ///
     /// To simply ensure that an index has been built, call `query()`, which
@@ -1581,5 +1616,82 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert!(keys.contains(&String::from("as/whitecatears")));
         assert!(keys.contains(&String::from("as/whitecattail")));
+    }
+
+    #[test]
+    fn counting_keys() {
+        let db_path = "tmp/test/counting_keys";
+        let _ = fs::remove_dir_all(db_path);
+        let views = vec!["tags".to_owned()];
+        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let documents = [
+            Asset {
+                key: String::from("as/blackcat"),
+                location: String::from("hawaii"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("black"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/blackdog"),
+                location: String::from("taiwan"),
+                tags: vec![
+                    String::from("dog"),
+                    String::from("black"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitecatears"),
+                location: String::from("hakone"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("ears"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitecattail"),
+                location: String::from("hakone"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitemouse"),
+                location: String::from("dublin"),
+                tags: vec![
+                    String::from("mouse"),
+                    String::from("white"),
+                    String::from("tail"),
+                ],
+            },
+        ];
+        for document in documents.iter() {
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, document);
+            assert!(result.is_ok());
+        }
+
+        // counting by one key
+        let result = dbase.count_by_key("tags", b"white");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+        let result = dbase.count_by_key("tags", b"black");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+
+        // counting all the keys
+        let result = dbase.count_all_keys("tags");
+        assert!(result.is_ok());
+        let counts = result.unwrap();
+        assert_eq!(counts[b"white".to_vec().into_boxed_slice().as_ref()], 3);
+        assert_eq!(counts[b"black".to_vec().into_boxed_slice().as_ref()], 2);
+        assert_eq!(counts[b"dog".to_vec().into_boxed_slice().as_ref()], 1);
+        assert_eq!(counts[b"cat".to_vec().into_boxed_slice().as_ref()], 3);
     }
 }

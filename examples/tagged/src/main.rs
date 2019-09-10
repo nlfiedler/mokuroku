@@ -132,4 +132,11 @@ fn main() {
         let doc_id = str::from_utf8(&result.doc_id).unwrap().to_owned();
         println!("query result key: {:}", doc_id);
     }
+
+    println!("counting occurrences of each key...");
+    let counts = dbase.count_all_keys("tags").unwrap();
+    for (tag, count) in counts.iter() {
+        let tag_str = str::from_utf8(tag).unwrap().to_owned();
+        println!("{:}: {:}", tag_str, count);
+    }
 }

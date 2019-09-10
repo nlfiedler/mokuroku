@@ -5,6 +5,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+### Added
+- `count_by_key()` to count number of index rows containing key.
+- `count_all_keys()` to return number of occurrences of all keys.
+
 ## [0.3.0] - 2019-09-08
 ### Added
 - `query_exact()` to return results matching the entire index key.
