@@ -9,6 +9,8 @@ This file follows the convention described at
 ### Added
 - `count_by_key()` to count number of index rows containing key.
 - `count_all_keys()` to return number of occurrences of all keys.
+### Changed
+- All query/count functions now panic if given an unknown index.
 
 ## [0.3.0] - 2019-09-08
 ### Added

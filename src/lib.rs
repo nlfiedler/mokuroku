@@ -311,11 +311,20 @@ impl Database {
         N: ToString,
     {
         let myviews: Vec<String> = views.into_iter().map(|ts| N::to_string(&ts)).collect();
-        let mut db_opts = Options::default();
-        db_opts.create_if_missing(true);
-        // Do not create the missing column families now, otherwise it becomes
-        // difficult to know if we need to build the indices.
-        let db = DB::open(&db_opts, db_path)?;
+        let mut opts = Options::default();
+        // Create the database files, but do not create the column families now,
+        // as we will create them only when they are needed.
+        opts.create_if_missing(true);
+        let cfs = if db_path.exists() {
+            DB::list_cf(&opts, db_path)?
+        } else {
+            vec![]
+        };
+        let db = if cfs.is_empty() {
+            DB::open(&opts, db_path)?
+        } else {
+            DB::open_cf(&opts, db_path, cfs)?
+        };
         Ok(Self {
             db,
             db_path: db_path.to_path_buf(),
@@ -566,15 +575,19 @@ impl Database {
     /// Ensure the column family for the named view has been built.
     ///
     fn ensure_view_built(&self, view: &str) -> Result<ColumnFamily, Error> {
-        let mut mrview = String::from(VIEW_PREFIX);
-        mrview.push_str(view);
-        // lazily build the index when it is queried
-        if self.db.cf_handle(&mrview).is_none() {
-            self.build(view, &mrview)?;
+        if self.views.iter().any(|v| v == view) {
+            let mut mrview = String::from(VIEW_PREFIX);
+            mrview.push_str(view);
+            // lazily build the index when it is queried
+            if self.db.cf_handle(&mrview).is_none() {
+                self.build(view, &mrview)?;
+            }
+            self.db
+                .cf_handle(&mrview)
+                .ok_or_else(|| err_msg("missing column family"))
+        } else {
+            panic!("\"{:}\" is not a registered view", view);
         }
-        self.db
-            .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing column family"))
     }
 
     ///
@@ -880,29 +893,36 @@ mod tests {
     }
 
     #[test]
-    fn put_get_delete() {
-        let db_path = "tmp/test/put_get_delete";
+    fn open_drop_open() {
+        // test in which we create a new database, add stuff, close it (by
+        // dropping), and open it again successfully
+        let db_path = "tmp/test/open_drop_open";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["value".to_owned()];
-        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = LenVal {
             key: String::from("lv/deadbeef"),
             len: 12,
             val: String::from("deceased cow"),
         };
         let key = document.key.as_bytes();
-        let result = dbase.put(&key, &document);
-        assert!(result.is_ok());
+        {
+            // scope the database so we can drop it
+            let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+            let result = dbase.put(&key, &document);
+            assert!(result.is_ok());
 
-        let result = dbase.query("value");
-        assert!(result.is_ok());
-        let iter = result.unwrap();
-        let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].key.as_ref(), b"deceased cow");
-        assert_eq!(results[0].doc_id.as_ref(), b"lv/deadbeef");
-        assert_eq!(results[0].value.as_ref(), b"");
+            let result = dbase.query("value");
+            assert!(result.is_ok());
+            let iter = result.unwrap();
+            let results: Vec<QueryResult> = iter.collect();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].key.as_ref(), b"deceased cow");
+            assert_eq!(results[0].doc_id.as_ref(), b"lv/deadbeef");
+            assert_eq!(results[0].value.as_ref(), b"");
+        }
 
+        // open the database again now that column families have been created
+        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let result: Result<Option<LenVal>, Error> = dbase.get(&key);
         assert!(result.is_ok());
         let option = result.unwrap();
@@ -1064,7 +1084,16 @@ mod tests {
         let key = document.key.as_bytes();
         let result = dbase.put(&key, &document);
         assert!(result.is_ok());
-        assert_eq!(count_index(&dbase, ""), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn query_on_unknown_view() {
+        let db_path = "tmp/test/query_on_unknown_view";
+        let _ = fs::remove_dir_all(db_path);
+        let views = vec!["viewname".to_owned()];
+        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let _ = dbase.query("nonesuch");
     }
 
     #[test]
@@ -1403,8 +1432,7 @@ mod tests {
     fn index_rebuild_delete() {
         let db_path = "tmp/test/index_rebuild_delete";
         let _ = fs::remove_dir_all(db_path);
-        // only mention the one view, we will build the other manually
-        let views = vec!["tags".to_owned()];
+        let views = vec!["tags".to_owned(), "location".to_owned()];
         let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
@@ -1472,66 +1500,73 @@ mod tests {
     fn index_cleanup() {
         let db_path = "tmp/test/index_cleanup";
         let _ = fs::remove_dir_all(db_path);
-        // only mention the one view, so we can clean up the other one
-        let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
-        let documents = [
-            Asset {
-                key: String::from("as/blackcat"),
-                location: String::from("hallows"),
-                tags: vec![
-                    String::from("cat"),
-                    String::from("black"),
-                    String::from("tail"),
-                ],
-            },
-            Asset {
-                key: String::from("as/blackdog"),
-                location: String::from("moors"),
-                tags: vec![
-                    String::from("dog"),
-                    String::from("black"),
-                    String::from("fur"),
-                ],
-            },
-            Asset {
-                key: String::from("as/whitecat"),
-                location: String::from("upstairs"),
-                tags: vec![
-                    String::from("cat"),
-                    String::from("white"),
-                    String::from("ears"),
-                ],
-            },
-            Asset {
-                key: String::from("as/whitemouse"),
-                location: String::from("attic"),
-                tags: vec![
-                    String::from("mouse"),
-                    String::from("white"),
-                    String::from("tail"),
-                ],
-            },
-        ];
-        for document in documents.iter() {
-            let key = document.key.as_bytes();
-            let result = dbase.put(&key, document);
+        let myview = "mycolumnfamily";
+        {
+            // scope the database so we can drop it and open again with a
+            // different set of views
+            let views = vec!["tags".to_owned(), "location".to_owned()];
+            let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+            let documents = [
+                Asset {
+                    key: String::from("as/blackcat"),
+                    location: String::from("hallows"),
+                    tags: vec![
+                        String::from("cat"),
+                        String::from("black"),
+                        String::from("tail"),
+                    ],
+                },
+                Asset {
+                    key: String::from("as/blackdog"),
+                    location: String::from("moors"),
+                    tags: vec![
+                        String::from("dog"),
+                        String::from("black"),
+                        String::from("fur"),
+                    ],
+                },
+                Asset {
+                    key: String::from("as/whitecat"),
+                    location: String::from("upstairs"),
+                    tags: vec![
+                        String::from("cat"),
+                        String::from("white"),
+                        String::from("ears"),
+                    ],
+                },
+                Asset {
+                    key: String::from("as/whitemouse"),
+                    location: String::from("attic"),
+                    tags: vec![
+                        String::from("mouse"),
+                        String::from("white"),
+                        String::from("tail"),
+                    ],
+                },
+            ];
+            for document in documents.iter() {
+                let key = document.key.as_bytes();
+                let result = dbase.put(&key, document);
+                assert!(result.is_ok());
+            }
+
+            // query to prime both the known and ad hoc indices
+            assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
+            assert_eq!(count_index_by_query(&dbase, "location", b"attic"), 1);
+
+            // create one of our own column families to make sure the library does
+            // _not_ remove it by mistake
+            let opts = Options::default();
+            let result = dbase.db().create_cf(myview, &opts);
+            assert!(result.is_ok());
+            let cf = result.unwrap();
+            let result = dbase.db().put_cf(cf, b"mykey", b"myvalue");
             assert!(result.is_ok());
         }
 
-        // query to prime both the known and ad hoc indices
-        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
-        assert_eq!(count_index_by_query(&dbase, "location", b"attic"), 1);
-
-        // create one of our own column families to make sure the library does
-        // _not_ remove it by mistake
-        let opts = Options::default();
-        let myview = "mycolumnfamily";
-        let result = dbase.db().create_cf(myview, &opts);
-        assert!(result.is_ok());
-        let cf = result.unwrap();
-        let result = dbase.db().put_cf(cf, b"mykey", b"myvalue");
-        assert!(result.is_ok());
+        // open the database again, but with a different set of views
+        let views = vec!["tags".to_owned()];
+        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
 
         // clean up the unknown index and verify it is gone
         let result = dbase.index_cleanup();
