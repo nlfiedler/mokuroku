@@ -5,11 +5,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [1.0.0] - 2019-11-17
 ### Added
 - `count_by_key()` to count number of index rows containing key.
 - `count_all_keys()` to return number of occurrences of all keys.
 ### Changed
+- **Index format has changed, indices must be rebuilt.**
 - All query/count functions now panic if given an unknown index.
 - Upgrade `rocksdb` crate to `0.13.0`, everything is mutable now.
 - Use sequence number instead of timestamp for stale index detection.
@@ -23,8 +24,8 @@ This file follows the convention described at
 
 ## [0.2.0] - 2019-09-07
 ### Changed
+- **Index format has changed, indices must be rebuilt.**
 - Detect and prune stale index entries on query.
-- Index format changed significantly, indices must be rebuilt.
 - Removed dependency on ulid crate.
 
 ## [0.1.0] - 2019-08-27
