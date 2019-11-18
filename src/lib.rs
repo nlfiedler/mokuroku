@@ -34,6 +34,18 @@
 //! let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
 //! ```
 //!
+//! ### Mutable
+//!
+//! Due to a change in the Rust wrapper for RocksDB, the database reference must
+//! be mutable in order to make changes to the column families. This library
+//! makes many such changes, and as a result most of the methods require that
+//! the database reference is mutable. It was that or try to very carefully use
+//! a `RwLock` to hide the mutable `DB`, but that proved to be rather tricky to
+//! get right (it is very easy to get a read lock and then call another function
+//! which attempts to get a write lock -- instant dead-lock). The mutable
+//! approach is safer and is simply passing along the change that the `rocksdb`
+//! crate made.
+//!
 //! ## Data Model
 //!
 //! The secondary indices are built when `Database.query()` is called and the
@@ -203,7 +215,7 @@ pub struct Emitter<'a> {
     /// Document primary key
     key: &'a [u8],
     /// Column family for the index
-    cf: &'a ColumnFamily<'a>,
+    cf: &'a ColumnFamily,
     /// Index key separator sequence.
     sep: &'a [u8],
     /// Duration since Unix epoch in nanos.
@@ -215,6 +227,8 @@ impl<'a> Emitter<'a> {
     fn new(db: &'a DB, key: &'a [u8], cf: &'a ColumnFamily, sep: &'a [u8]) -> Self {
         // get the current time for detecting stale records later; once
         // rust-rocksdb exposes the sequence number, use that instead
+        // TODO: use sequence number instead of timestamp
+        // let seq = db.latest_sequence_number();
         let ts = nanos_since_epoch();
         Self {
             db,
@@ -248,7 +262,7 @@ impl<'a> Emitter<'a> {
         if let Some(value) = value.as_ref() {
             ivalue.extend_from_slice(value.as_ref());
         }
-        self.db.put_cf(*self.cf, &uniq_key, ivalue)?;
+        self.db.put_cf(self.cf, &uniq_key, ivalue)?;
         Ok(())
     }
 }
@@ -335,8 +349,12 @@ impl Database {
     }
 
     ///
-    /// Set the separator byte sequence used to separate the index key from the
-    /// primary data record key in the index. The default is a single null byte.
+    /// Set the byte sequence used to separate index key from primary key.
+    ///
+    /// This sets the separator byte sequence used to separate the index key
+    /// from the primary data record key in the index. The default is a single
+    /// null byte. Note that changing the separator sequence may invalidate any
+    /// previously built indices.
     ///
     pub fn separator(mut self, sep: &[u8]) -> Self {
         if sep.is_empty() {
@@ -359,10 +377,19 @@ impl Database {
     }
 
     ///
+    /// Return a mutable reference to the RocksDB instance.
+    ///
+    /// The mutable version of the `db()` function.
+    ///
+    pub fn mut_db(&mut self) -> &mut DB {
+        &mut self.db
+    }
+
+    ///
     /// Put the data record key/value pair into the database, ensuring all
     /// indices are updated, if they have been built.
     ///
-    pub fn put<D, K>(&self, key: K, value: &D) -> Result<(), Error>
+    pub fn put<D, K>(&mut self, key: K, value: &D) -> Result<(), Error>
     where
         D: Document,
         K: AsRef<[u8]>,
@@ -401,7 +428,7 @@ impl Database {
     ///
     /// Delete the data record associated with the given key.
     ///
-    pub fn delete<K: AsRef<[u8]>>(&self, key: K) -> Result<(), Error> {
+    pub fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> Result<(), Error> {
         self.db.delete(key.as_ref())?;
         self.update_changes(key.as_ref())?;
         Ok(())
@@ -411,19 +438,24 @@ impl Database {
     /// Insert a record of the change to the given primary key, tracking
     /// the time when this change was made.
     ///
-    fn update_changes<K>(&self, key: K) -> Result<(), Error>
+    fn update_changes<K>(&mut self, key: K) -> Result<(), Error>
     where
         K: AsRef<[u8]>,
     {
-        let cf_opt = self.db.cf_handle(CHANGES_CF);
-        let cf = if cf_opt.is_none() {
-            let opts = Options::default();
-            self.db.create_cf(CHANGES_CF, &opts)?
-        } else {
-            cf_opt.unwrap()
+        let cf = match self.db.cf_handle(CHANGES_CF) {
+            None => {
+                let opts = Options::default();
+                self.db.create_cf(CHANGES_CF, &opts)?;
+                self.db
+                    .cf_handle(CHANGES_CF)
+                    .ok_or_else(|| err_msg("missing changes column family"))?
+            }
+            Some(cf) => cf,
         };
         // currently using a timestamp, but would rather use a sequence number,
         // once rust-rocksdb exposes that function
+        // TODO: use sequence number instead of timestamp
+        // let seq = db.latest_sequence_number();
         let ts = nanos_since_epoch();
         self.db.put_cf(cf, key.as_ref(), &ts)?;
         Ok(())
@@ -435,11 +467,14 @@ impl Database {
     /// If the index has not yet been built, it will be built prior to returning
     /// any results.
     ///
-    pub fn query(&self, view: &str) -> Result<QueryIterator, Error> {
-        let cf = self.ensure_view_built(view)?;
-        let iter = self.db.iterator_cf(cf, IteratorMode::Start)?;
-        let qiter = QueryIterator::new(&self.db, iter, &self.key_sep, cf);
-        Ok(qiter)
+    pub fn query(&mut self, view: &str) -> Result<QueryIterator, Error> {
+        let mrview = self.ensure_view_built(view)?;
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing view column family"))?;
+        let iter = self.db.iterator_cf(&cf, IteratorMode::Start)?;
+        Ok(QueryIterator::new(&self.db, iter, &self.key_sep, &cf))
     }
 
     ///
@@ -450,11 +485,24 @@ impl Database {
     ///
     /// As with `query()`, if the index has not yet been built, it will be.
     ///
-    pub fn query_by_key<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<QueryIterator, Error> {
-        let cf = self.ensure_view_built(view)?;
-        let iter = self.db.prefix_iterator_cf(cf, key.as_ref())?;
-        let qiter = QueryIterator::new_prefix(&self.db, iter, &self.key_sep, cf, key.as_ref());
-        Ok(qiter)
+    pub fn query_by_key<K: AsRef<[u8]>>(
+        &mut self,
+        view: &str,
+        key: K,
+    ) -> Result<QueryIterator, Error> {
+        let mrview = self.ensure_view_built(view)?;
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing view column family"))?;
+        let iter = self.db.prefix_iterator_cf(&cf, key.as_ref())?;
+        Ok(QueryIterator::new_prefix(
+            &self.db,
+            iter,
+            &self.key_sep,
+            cf,
+            key.as_ref(),
+        ))
     }
 
     ///
@@ -468,7 +516,7 @@ impl Database {
     /// filtering out the documents that lack all of the keys. As such this
     /// returns a vector versus an iterator.
     ///
-    pub fn query_all_keys<I, N>(&self, view: &str, keys: I) -> Result<Vec<QueryResult>, Error>
+    pub fn query_all_keys<I, N>(&mut self, view: &str, keys: I) -> Result<Vec<QueryResult>, Error>
     where
         I: IntoIterator<Item = N>,
         N: AsRef<[u8]>,
@@ -510,15 +558,28 @@ impl Database {
     ///
     /// As with `query()`, if the index has not yet been built, it will be.
     ///
-    pub fn query_exact<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<QueryIterator, Error> {
-        let cf = self.ensure_view_built(view)?;
+    pub fn query_exact<K: AsRef<[u8]>>(
+        &mut self,
+        view: &str,
+        key: K,
+    ) -> Result<QueryIterator, Error> {
+        let mrview = self.ensure_view_built(view)?;
         let len = key.as_ref().len() + self.key_sep.len();
-        let mut sep_key: Vec<u8> = Vec::with_capacity(len);
-        sep_key.extend_from_slice(&key.as_ref()[..]);
-        sep_key.extend_from_slice(&self.key_sep);
-        let iter = self.db.prefix_iterator_cf(cf, &sep_key)?;
-        let qiter = QueryIterator::new_prefix(&self.db, iter, &self.key_sep, cf, &sep_key);
-        Ok(qiter)
+        let mut prefix: Vec<u8> = Vec::with_capacity(len);
+        prefix.extend_from_slice(&key.as_ref()[..]);
+        prefix.extend_from_slice(&self.key_sep);
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing view column family"))?;
+        let iter = self.db.prefix_iterator_cf(&cf, &prefix)?;
+        Ok(QueryIterator::new_prefix(
+            &self.db,
+            iter,
+            &self.key_sep,
+            cf,
+            &prefix,
+        ))
     }
 
     ///
@@ -527,7 +588,7 @@ impl Database {
     ///
     /// As with `query()`, if the index has not yet been built, it will be.
     ///
-    pub fn count_by_key<K: AsRef<[u8]>>(&self, view: &str, key: K) -> Result<usize, Error> {
+    pub fn count_by_key<K: AsRef<[u8]>>(&mut self, view: &str, key: K) -> Result<usize, Error> {
         // For the time being this is nothing more than query with a call to
         // count(), but perhaps some day it would be possible to avoid some
         // unnecessary work when we only want a single count.
@@ -543,7 +604,7 @@ impl Database {
     ///
     /// As with `query()`, if the index has not yet been built, it will be.
     ///
-    pub fn count_all_keys(&self, view: &str) -> Result<HashMap<Box<[u8]>, usize>, Error> {
+    pub fn count_all_keys(&mut self, view: &str) -> Result<HashMap<Box<[u8]>, usize>, Error> {
         let iter = self.query(view)?;
         let mut key_counts: HashMap<Box<[u8]>, usize> = HashMap::new();
         iter.for_each(|r| {
@@ -562,7 +623,7 @@ impl Database {
     /// To simply ensure that an index has been built, call `query()`, which
     /// will not delete the existing index.
     ///
-    pub fn rebuild(&self, view: &str) -> Result<(), Error> {
+    pub fn rebuild(&mut self, view: &str) -> Result<(), Error> {
         let mut mrview = String::from(VIEW_PREFIX);
         mrview.push_str(view);
         if let Some(_cf) = self.db.cf_handle(&mrview) {
@@ -574,17 +635,17 @@ impl Database {
     ///
     /// Ensure the column family for the named view has been built.
     ///
-    fn ensure_view_built(&self, view: &str) -> Result<ColumnFamily, Error> {
+    fn ensure_view_built(&mut self, view: &str) -> Result<String, Error> {
         if self.views.iter().any(|v| v == view) {
             let mut mrview = String::from(VIEW_PREFIX);
             mrview.push_str(view);
             // lazily build the index when it is queried
             if self.db.cf_handle(&mrview).is_none() {
                 self.build(view, &mrview)?;
-            }
-            self.db
-                .cf_handle(&mrview)
-                .ok_or_else(|| err_msg("missing column family"))
+            };
+            // return a value not associated with the &mut self so that the
+            // caller is free to use &self without conflict
+            Ok(mrview)
         } else {
             panic!("\"{:}\" is not a registered view", view);
         }
@@ -593,12 +654,16 @@ impl Database {
     ///
     /// Build the named index now.
     ///
-    fn build(&self, view: &str, mrview: &str) -> Result<(), Error> {
+    fn build(&mut self, view: &str, mrview: &str) -> Result<(), Error> {
         let opts = Options::default();
-        let cf = self.db.create_cf(&mrview, &opts)?;
+        self.db.create_cf(&mrview, &opts)?;
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing view column family"))?;
         let iter = self.db.iterator(IteratorMode::Start);
         for (key, value) in iter {
-            let emitter = Emitter::new(&self.db, &key, &cf, &self.key_sep);
+            let emitter = Emitter::new(&self.db, &key, cf, &self.key_sep);
             (*self.mapper)(&key, &value, view, &emitter)?;
         }
         Ok(())
@@ -629,7 +694,7 @@ impl Database {
     /// instance, and yet have the "mrview-" prefix, removing any that are
     /// found.
     ///
-    pub fn index_cleanup(&self) -> Result<(), Error> {
+    pub fn index_cleanup(&mut self) -> Result<(), Error> {
         // convert the view names to column family names
         let view_names: Vec<String> = self
             .views
@@ -717,7 +782,7 @@ impl QueryResult {
 /// # }
 /// let db_path = "tmp/assets/database";
 /// let views = vec!["tags".to_owned()];
-/// let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+/// let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
 /// let result = dbase.query_by_key("tags", b"cat");
 /// let iter = result.unwrap();
 /// for result in iter {
@@ -734,19 +799,19 @@ pub struct QueryIterator<'a> {
     /// Key prefix to filter results, if any.
     prefix: Option<Vec<u8>>,
     /// Index key separator sequence.
-    key_sep: &'a [u8],
+    key_sep: Vec<u8>,
     /// Column family for the index this query is based on.
-    cf: ColumnFamily<'a>,
+    cf: &'a ColumnFamily,
 }
 
 impl<'a> QueryIterator<'a> {
     /// Construct a new QueryIterator from the DBIterator.
-    fn new(db: &'a DB, dbiter: DBIterator<'a>, sep: &'a [u8], cf: ColumnFamily<'a>) -> Self {
+    fn new(db: &'a DB, dbiter: DBIterator<'a>, sep: &[u8], cf: &'a ColumnFamily) -> Self {
         Self {
             db,
             dbiter,
             prefix: None,
-            key_sep: sep,
+            key_sep: sep.to_owned(),
             cf,
         }
     }
@@ -756,15 +821,15 @@ impl<'a> QueryIterator<'a> {
     fn new_prefix(
         db: &'a DB,
         dbiter: DBIterator<'a>,
-        sep: &'a [u8],
-        cf: ColumnFamily<'a>,
+        sep: &[u8],
+        cf: &'a ColumnFamily,
         prefix: &[u8],
     ) -> Self {
         Self {
             db,
             dbiter,
             prefix: Some(prefix.to_owned()),
-            key_sep: sep,
+            key_sep: sep.to_owned(),
             cf,
         }
     }
@@ -785,7 +850,7 @@ impl<'a> QueryIterator<'a> {
         // are fairly short, and the index keys are likely even shorter.
         //
         for (idx, win) in key.windows(self.key_sep.len()).enumerate() {
-            if win == self.key_sep {
+            if win == &self.key_sep[..] {
                 return idx;
             }
         }
@@ -804,6 +869,7 @@ impl<'a> QueryIterator<'a> {
         //
         if let Some(cf) = self.db.cf_handle(CHANGES_CF) {
             if let Ok(Some(val)) = self.db.get_cf(cf, key) {
+                // TODO: change to read u64 and compare
                 let index_ts = read_le_u128(ts);
                 let changed_ts = read_le_u128(&val);
                 return index_ts < changed_ts;
@@ -832,11 +898,12 @@ impl<'a> Iterator for QueryIterator<'a> {
             let sep_pos = self.find_separator(&key);
             let short_key = key[..sep_pos].to_vec();
             let doc_id = key[sep_pos + self.key_sep.len()..].to_vec();
+            // TODO: change to read 8 bytes for u64 sequence number
             let ts = value[..16].to_vec();
             if self.is_stale(&doc_id, &ts) {
                 // prune the stale entry so we never see it again
                 // n.b. the result is Ok even if the record never existed
-                let _ = self.db.delete_cf(self.cf, key);
+                let _ = self.db.delete_cf(&self.cf, key);
             } else {
                 // lop off the 16 byte timestamp from the index value
                 let ivalue = value[16..].to_vec();
@@ -907,7 +974,7 @@ mod tests {
         let key = document.key.as_bytes();
         {
             // scope the database so we can drop it
-            let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+            let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
             let result = dbase.put(&key, &document);
             assert!(result.is_ok());
 
@@ -922,7 +989,7 @@ mod tests {
         }
 
         // open the database again now that column families have been created
-        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let result: Result<Option<LenVal>, Error> = dbase.get(&key);
         assert!(result.is_ok());
         let option = result.unwrap();
@@ -990,7 +1057,7 @@ mod tests {
         let db_path = "tmp/test/asset_view_creation";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             key: String::from("as/cafebabe"),
             location: String::from("hawaii"),
@@ -1026,7 +1093,7 @@ mod tests {
         let db_path = "tmp/test/no_view_creation";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             // intentionally using a key that does not match anything in our mapper
             key: String::from("none/cafebabe"),
@@ -1040,7 +1107,7 @@ mod tests {
         let key = document.key.as_bytes();
         let result = dbase.put(&key, &document);
         assert!(result.is_ok());
-        assert_eq!(count_index(&dbase, "tags"), 0);
+        assert_eq!(count_index(&mut dbase, "tags"), 0);
     }
 
     #[test]
@@ -1049,7 +1116,7 @@ mod tests {
         let _ = fs::remove_dir_all(db_path);
         // intentionally passing an empty view name
         let views = vec!["".to_owned()];
-        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             key: String::from("as/cafebabe"),
             location: String::from("hawaii"),
@@ -1062,7 +1129,7 @@ mod tests {
         let key = document.key.as_bytes();
         let result = dbase.put(&key, &document);
         assert!(result.is_ok());
-        assert_eq!(count_index(&dbase, ""), 0);
+        assert_eq!(count_index(&mut dbase, ""), 0);
     }
 
     #[test]
@@ -1071,7 +1138,7 @@ mod tests {
         let _ = fs::remove_dir_all(db_path);
         let views: Vec<String> = Vec::new();
         // intentionally passing an empty view list
-        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             key: String::from("as/cafebabe"),
             location: String::from("hawaii"),
@@ -1092,7 +1159,7 @@ mod tests {
         let db_path = "tmp/test/query_on_unknown_view";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["viewname".to_owned()];
-        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let _ = dbase.query("nonesuch");
     }
 
@@ -1101,7 +1168,7 @@ mod tests {
         let db_path = "tmp/test/query_by_key";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/cafebabe"),
@@ -1146,8 +1213,8 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        assert_eq!(count_index(&dbase, "tags"), 12);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"nonesuch"), 0);
+        assert_eq!(count_index(&mut dbase, "tags"), 12);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"nonesuch"), 0);
 
         // querying by a specific tag: cat
         let result = dbase.query_by_key("tags", b"cat");
@@ -1188,7 +1255,7 @@ mod tests {
         let views = vec!["tags".to_owned()];
         let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let sep = vec![0xff, 0xff, 0xff];
-        let dbase = dbase.separator(&sep);
+        let mut dbase = dbase.separator(&sep);
         let documents = [
             Asset {
                 key: String::from("as/cafebabe"),
@@ -1250,7 +1317,7 @@ mod tests {
     }
 
     /// Query the database and return the number of results.
-    fn count_index(dbase: &Database, view: &str) -> usize {
+    fn count_index(dbase: &mut Database, view: &str) -> usize {
         let result = dbase.query(view);
         assert!(result.is_ok());
         let iter = result.unwrap();
@@ -1258,7 +1325,7 @@ mod tests {
     }
 
     /// Return the number of records matching the query.
-    fn count_index_by_query(dbase: &Database, view: &str, query: &[u8]) -> usize {
+    fn count_index_by_query(dbase: &mut Database, view: &str, query: &[u8]) -> usize {
         let result = dbase.query_by_key(view, query);
         assert!(result.is_ok());
         let iter = result.unwrap();
@@ -1266,7 +1333,7 @@ mod tests {
     }
 
     /// Return the number of records exactly matching the query.
-    fn count_index_exact(dbase: &Database, view: &str, query: &[u8]) -> usize {
+    fn count_index_exact(dbase: &mut Database, view: &str, query: &[u8]) -> usize {
         let result = dbase.query_exact(view, query);
         assert!(result.is_ok());
         let iter = result.unwrap();
@@ -1294,7 +1361,7 @@ mod tests {
         let db_path = "tmp/test/query_with_changes";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/cafebabe"),
@@ -1339,9 +1406,9 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"tail"), 2);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"cat"), 2);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"fur"), 1);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"tail"), 2);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"cat"), 2);
         assert_eq!(count_index_records(dbase.db(), "tags"), 12);
 
         // update a couple of existing records
@@ -1373,19 +1440,19 @@ mod tests {
 
         assert_eq!(count_index_records(dbase.db(), "tags"), 16);
         // this query should perform a compaction!
-        assert_eq!(count_index(&dbase, "tags"), 12);
+        assert_eq!(count_index(&mut dbase, "tags"), 12);
         assert_eq!(count_index_records(dbase.db(), "tags"), 12);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"cat"), 1);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 0);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"fuzz"), 1);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"tail"), 3);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"cat"), 1);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"fur"), 0);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"fuzz"), 1);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"tail"), 3);
 
         // delete an entry, and query again to perform compaction
         let result = dbase.delete(String::from("as/baadf00d").as_bytes());
         assert!(result.is_ok());
-        assert_eq!(count_index(&dbase, "tags"), 9);
+        assert_eq!(count_index(&mut dbase, "tags"), 9);
         assert_eq!(count_index_records(dbase.db(), "tags"), 9);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"mouse"), 0);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"mouse"), 0);
     }
 
     #[test]
@@ -1393,7 +1460,7 @@ mod tests {
         let db_path = "tmp/test/query_exact";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/onecat"),
@@ -1420,12 +1487,12 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        assert_eq!(count_index_by_query(&dbase, "tags", b"cat"), 2);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"cats"), 1);
-        assert_eq!(count_index_by_query(&dbase, "tags", b"tail"), 2);
-        assert_eq!(count_index_exact(&dbase, "tags", b"cat"), 1);
-        assert_eq!(count_index_exact(&dbase, "tags", b"orange"), 1);
-        assert_eq!(count_index_exact(&dbase, "tags", b"tail"), 1);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"cat"), 2);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"cats"), 1);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"tail"), 2);
+        assert_eq!(count_index_exact(&mut dbase, "tags", b"cat"), 1);
+        assert_eq!(count_index_exact(&mut dbase, "tags", b"orange"), 1);
+        assert_eq!(count_index_exact(&mut dbase, "tags", b"tail"), 1);
     }
 
     #[test]
@@ -1479,13 +1546,13 @@ mod tests {
         }
 
         // query, rebuild, query again
-        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"fur"), 1);
         let result = dbase.rebuild("tags");
         assert!(result.is_ok());
-        assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
+        assert_eq!(count_index_by_query(&mut dbase, "tags", b"fur"), 1);
         let result = dbase.rebuild("location");
         assert!(result.is_ok());
-        assert_eq!(count_index_by_query(&dbase, "location", b"attic"), 1);
+        assert_eq!(count_index_by_query(&mut dbase, "location", b"attic"), 1);
 
         // delete the indices for good measure
         let result = dbase.delete_index("tags");
@@ -1505,7 +1572,7 @@ mod tests {
             // scope the database so we can drop it and open again with a
             // different set of views
             let views = vec!["tags".to_owned(), "location".to_owned()];
-            let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+            let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
             let documents = [
                 Asset {
                     key: String::from("as/blackcat"),
@@ -1551,31 +1618,33 @@ mod tests {
             }
 
             // query to prime both the known and ad hoc indices
-            assert_eq!(count_index_by_query(&dbase, "tags", b"fur"), 1);
-            assert_eq!(count_index_by_query(&dbase, "location", b"attic"), 1);
+            assert_eq!(count_index_by_query(&mut dbase, "tags", b"fur"), 1);
+            assert_eq!(count_index_by_query(&mut dbase, "location", b"attic"), 1);
 
             // create one of our own column families to make sure the library does
             // _not_ remove it by mistake
             let opts = Options::default();
-            let result = dbase.db().create_cf(myview, &opts);
+            let db = dbase.mut_db();
+            let result = db.create_cf(myview, &opts);
             assert!(result.is_ok());
-            let cf = result.unwrap();
-            let result = dbase.db().put_cf(cf, b"mykey", b"myvalue");
+            let cf = db.cf_handle(myview).unwrap();
+            let result = db.put_cf(cf, b"mykey", b"myvalue");
             assert!(result.is_ok());
         }
 
         // open the database again, but with a different set of views
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
 
         // clean up the unknown index and verify it is gone
         let result = dbase.index_cleanup();
         assert!(result.is_ok());
-        let opt = dbase.db().cf_handle("mrview-tags");
+        let db = dbase.db();
+        let opt = db.cf_handle("mrview-tags");
         assert!(opt.is_some());
-        let opt = dbase.db().cf_handle("mrview-location");
+        let opt = db.cf_handle("mrview-location");
         assert!(opt.is_none());
-        let opt = dbase.db().cf_handle(myview);
+        let opt = db.cf_handle(myview);
         assert!(opt.is_some());
     }
 
@@ -1584,7 +1653,7 @@ mod tests {
         let db_path = "tmp/test/query_all_keys";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/blackcat"),
@@ -1658,7 +1727,7 @@ mod tests {
         let db_path = "tmp/test/counting_keys";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/blackcat"),

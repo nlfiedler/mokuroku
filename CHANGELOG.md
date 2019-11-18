@@ -11,6 +11,7 @@ This file follows the convention described at
 - `count_all_keys()` to return number of occurrences of all keys.
 ### Changed
 - All query/count functions now panic if given an unknown index.
+- Upgrade `rocksdb` crate to `0.13.0`, everything is mutable now.
 
 ## [0.3.0] - 2019-09-08
 ### Added
