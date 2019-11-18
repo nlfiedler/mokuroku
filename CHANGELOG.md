@@ -12,6 +12,7 @@ This file follows the convention described at
 ### Changed
 - All query/count functions now panic if given an unknown index.
 - Upgrade `rocksdb` crate to `0.13.0`, everything is mutable now.
+- Use sequence number instead of timestamp for stale index detection.
 
 ## [0.3.0] - 2019-09-08
 ### Added

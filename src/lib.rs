@@ -71,7 +71,6 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 ///
 /// `Document` defines operations required for building the index.
@@ -218,24 +217,20 @@ pub struct Emitter<'a> {
     cf: &'a ColumnFamily,
     /// Index key separator sequence.
     sep: &'a [u8],
-    /// Duration since Unix epoch in nanos.
-    ts: Vec<u8>,
+    /// Current database sequence number.
+    seq: Vec<u8>,
 }
 
 impl<'a> Emitter<'a> {
     /// Construct an Emitter for processing the given key and view.
     fn new(db: &'a DB, key: &'a [u8], cf: &'a ColumnFamily, sep: &'a [u8]) -> Self {
-        // get the current time for detecting stale records later; once
-        // rust-rocksdb exposes the sequence number, use that instead
-        // TODO: use sequence number instead of timestamp
-        // let seq = db.latest_sequence_number();
-        let ts = nanos_since_epoch();
+        let seq = db.latest_sequence_number().to_le_bytes().to_vec();
         Self {
             db,
             key,
             cf,
             sep,
-            ts,
+            seq,
         }
     }
 
@@ -255,10 +250,10 @@ impl<'a> Emitter<'a> {
         uniq_key.extend_from_slice(&key.as_ref()[..]);
         uniq_key.extend_from_slice(self.sep);
         uniq_key.extend_from_slice(self.key);
-        // prefix the index value, if any, with the timestamp
+        // prefix the index value, if any, with the sequence number
         let value_len = value.as_ref().map_or(0, |v| v.as_ref().len());
-        let mut ivalue: Vec<u8> = Vec::with_capacity(self.ts.len() + value_len);
-        ivalue.extend_from_slice(&self.ts);
+        let mut ivalue: Vec<u8> = Vec::with_capacity(self.seq.len() + value_len);
+        ivalue.extend_from_slice(&self.seq);
         if let Some(value) = value.as_ref() {
             ivalue.extend_from_slice(value.as_ref());
         }
@@ -302,9 +297,8 @@ pub struct Database {
 const VIEW_PREFIX: &str = "mrview-";
 
 // Name of the column family where we track changed data records. For now the
-// key is the data record primary key, and the value is the 16 bytes
-// representing the nanoseconds since the Unix epoch. Eventually it should be
-// the RocksDB sequence number, which seems more suited for this purpose.
+// key is the data record primary key, and the value is the database sequence
+// number at the time of the change.
 const CHANGES_CF: &str = "mrview--changes";
 
 impl Database {
@@ -436,7 +430,7 @@ impl Database {
 
     ///
     /// Insert a record of the change to the given primary key, tracking
-    /// the time when this change was made.
+    /// the database sequence number when this change was made.
     ///
     fn update_changes<K>(&mut self, key: K) -> Result<(), Error>
     where
@@ -452,12 +446,8 @@ impl Database {
             }
             Some(cf) => cf,
         };
-        // currently using a timestamp, but would rather use a sequence number,
-        // once rust-rocksdb exposes that function
-        // TODO: use sequence number instead of timestamp
-        // let seq = db.latest_sequence_number();
-        let ts = nanos_since_epoch();
-        self.db.put_cf(cf, key.as_ref(), &ts)?;
+        let seq = self.db.latest_sequence_number();
+        self.db.put_cf(cf, key.as_ref(), &seq.to_le_bytes())?;
         Ok(())
     }
 
@@ -722,26 +712,11 @@ impl Database {
 }
 
 ///
-/// Return a vector of 16 bytes representing the nanoseconds since the Unix
-/// epoch, useful as a very precise timestamp.
+/// Convert the first 8 bytes of the slice into a u64.
 ///
-fn nanos_since_epoch() -> Vec<u8> {
-    let now = SystemTime::now();
-    let ts: u128 = if let Ok(duration) = now.duration_since(std::time::UNIX_EPOCH) {
-        duration.as_nanos()
-    } else {
-        0
-    };
-    let ts_bytes = ts.to_le_bytes();
-    ts_bytes.to_vec()
-}
-
-///
-/// Convert the first 16 bytes of the slice into a u128.
-///
-fn read_le_u128(input: &[u8]) -> u128 {
-    let (int_bytes, _rest) = input.split_at(std::mem::size_of::<u128>());
-    u128::from_le_bytes(int_bytes.try_into().unwrap())
+fn read_le_u64(input: &[u8]) -> u64 {
+    let (int_bytes, _rest) = input.split_at(std::mem::size_of::<u64>());
+    u64::from_le_bytes(int_bytes.try_into().unwrap())
 }
 
 ///
@@ -802,17 +777,21 @@ pub struct QueryIterator<'a> {
     key_sep: Vec<u8>,
     /// Column family for the index this query is based on.
     cf: &'a ColumnFamily,
+    /// Size in bytes of the sequence number.
+    seq_len: usize,
 }
 
 impl<'a> QueryIterator<'a> {
     /// Construct a new QueryIterator from the DBIterator.
     fn new(db: &'a DB, dbiter: DBIterator<'a>, sep: &[u8], cf: &'a ColumnFamily) -> Self {
+        let u64_len = std::mem::size_of::<u64>();
         Self {
             db,
             dbiter,
             prefix: None,
             key_sep: sep.to_owned(),
             cf,
+            seq_len: u64_len,
         }
     }
 
@@ -825,12 +804,14 @@ impl<'a> QueryIterator<'a> {
         cf: &'a ColumnFamily,
         prefix: &[u8],
     ) -> Self {
+        let u64_len = std::mem::size_of::<u64>();
         Self {
             db,
             dbiter,
             prefix: Some(prefix.to_owned()),
             key_sep: sep.to_owned(),
             cf,
+            seq_len: u64_len,
         }
     }
 
@@ -857,9 +838,9 @@ impl<'a> QueryIterator<'a> {
         0
     }
 
-    /// Indicate if the given timestamp for an index entry is older than the
-    /// "changes" entry for the given primary key (i.e. it is stale).
-    fn is_stale(&self, key: &[u8], ts: &[u8]) -> bool {
+    /// Indicate if the given sequence number for an index entry is older than
+    /// the "changes" entry for the given primary key (i.e. it is stale).
+    fn is_stale(&self, key: &[u8], seq: &[u8]) -> bool {
         //
         // Caching: could use a bloom filter to avoid reading from the database
         // multiple times for the same primary key. However, that is likely to
@@ -869,10 +850,9 @@ impl<'a> QueryIterator<'a> {
         //
         if let Some(cf) = self.db.cf_handle(CHANGES_CF) {
             if let Ok(Some(val)) = self.db.get_cf(cf, key) {
-                // TODO: change to read u64 and compare
-                let index_ts = read_le_u128(ts);
-                let changed_ts = read_le_u128(&val);
-                return index_ts < changed_ts;
+                let index_seq = read_le_u64(seq);
+                let changed_seq = read_le_u64(&val);
+                return index_seq < changed_seq;
             }
         }
         false
@@ -898,15 +878,14 @@ impl<'a> Iterator for QueryIterator<'a> {
             let sep_pos = self.find_separator(&key);
             let short_key = key[..sep_pos].to_vec();
             let doc_id = key[sep_pos + self.key_sep.len()..].to_vec();
-            // TODO: change to read 8 bytes for u64 sequence number
-            let ts = value[..16].to_vec();
-            if self.is_stale(&doc_id, &ts) {
+            let seq = value[..self.seq_len].to_vec();
+            if self.is_stale(&doc_id, &seq) {
                 // prune the stale entry so we never see it again
                 // n.b. the result is Ok even if the record never existed
                 let _ = self.db.delete_cf(&self.cf, key);
             } else {
-                // lop off the 16 byte timestamp from the index value
-                let ivalue = value[16..].to_vec();
+                // lop off the sequence number from the index value
+                let ivalue = value[self.seq_len..].to_vec();
                 return Some(QueryResult::new(
                     short_key.into_boxed_slice(),
                     ivalue.into_boxed_slice(),
