@@ -62,9 +62,13 @@ $ cargo test
 
 ## Examples
 
-See the full example in the `examples/tagged` directory, which creates a RocksDB
-database, adds a few records, establishes a secondary index, and queries that
-index using specific key values.
+See the full example in `examples/tagged.rs`, which creates a RocksDB database,
+adds a few records, establishes a secondary index, and queries that index using
+specific key values.
+
+```shell
+$ cargo run --example tagged
+```
 
 ### Quick Example
 
