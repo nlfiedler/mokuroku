@@ -318,11 +318,29 @@ impl Database {
         I: IntoIterator<Item = N>,
         N: ToString,
     {
-        let myviews: Vec<String> = views.into_iter().map(|ts| N::to_string(&ts)).collect();
         let mut opts = Options::default();
         // Create the database files, but do not create the column families now,
         // as we will create them only when they are needed.
         opts.create_if_missing(true);
+        Database::with_opts(db_path, views, mapper, opts)
+    }
+
+    ///
+    /// Create an instance of Database using the given path for storage.
+    ///
+    /// Like `new()` but the application controls the options.
+    ///
+    pub fn with_opts<I, N>(
+        db_path: &Path,
+        views: I,
+        mapper: ByteMapper,
+        opts: Options,
+    ) -> Result<Self, Error>
+    where
+        I: IntoIterator<Item = N>,
+        N: ToString,
+    {
+        let myviews: Vec<String> = views.into_iter().map(|ts| N::to_string(&ts)).collect();
         let cfs = if db_path.exists() {
             DB::list_cf(&opts, db_path)?
         } else {
@@ -968,7 +986,11 @@ mod tests {
         }
 
         // open the database again now that column families have been created
-        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        // (and pass custom options, too, to test that constructor)
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        let mut dbase =
+            Database::with_opts(Path::new(db_path), &views, Box::new(mapper), opts).unwrap();
         let result: Result<Option<LenVal>, Error> = dbase.get(&key);
         assert!(result.is_ok());
         let option = result.unwrap();

@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [1.0.1] - 2019-12-23
+### Added
+- Add `with_opts()` to provide custom database options.
+
 ## [1.0.0] - 2019-11-17
 ### Added
 - `count_by_key()` to count number of index rows containing key.
