@@ -5,6 +5,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [2.0.0] - 2019-12-23
+### Changed
+- Rename `new()` to `open_default()`, and `with_opts()` to `open()`, to better
+  reflect the RocksDB function names.
+- Mark `ByteMapper` with `Send` and `Sync` to support concurrency.
+
 ## [1.0.1] - 2019-12-23
 ### Added
 - Add `with_opts()` to provide custom database options.

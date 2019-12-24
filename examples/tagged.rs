@@ -58,7 +58,7 @@ fn main() {
     let db_path = "tmp/assets/database";
     let _ = fs::remove_dir_all(db_path);
     let views = vec!["tags".to_owned()];
-    let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+    let mut dbase = Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
     let documents = [
         Asset {
             key: String::from("asset/blackcat"),

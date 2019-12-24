@@ -31,7 +31,7 @@
 //! }
 //! let db_path = "my_database";
 //! let views = vec!["tags".to_owned()];
-//! let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+//! let dbase = Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
 //! ```
 //!
 //! ### Mutable
@@ -83,7 +83,7 @@ use std::path::{Path, PathBuf};
 /// instance of `Document`, there is no need to deserialize the value when
 /// calling `map()`, since it is already in its natural form. The `map()`
 /// function will eventually receive every view name that was initially provided
-/// to `Database::new()`, and it is up to each `Document` implementation to
+/// to `Database::open_default()`, and it is up to each `Document` implementation to
 /// ignore views that are not relevant.
 ///
 /// This example is using the [serde](https://crates.io/crates/serde) crate,
@@ -201,7 +201,7 @@ pub trait Document: Sized {
 /// }
 /// ```
 ///
-pub type ByteMapper = Box<dyn Fn(&[u8], &[u8], &str, &Emitter) -> Result<(), Error>>;
+pub type ByteMapper = Box<dyn Fn(&[u8], &[u8], &str, &Emitter) -> Result<(), Error> + Send + Sync>;
 
 ///
 /// The `Emitter` receives index key/value pairs from the application.
@@ -303,7 +303,7 @@ const CHANGES_CF: &str = "mrview--changes";
 
 impl Database {
     ///
-    /// Create an instance of Database using the given path for storage.
+    /// Open a database with default options.
     ///
     /// The set of view names are passed to the `Document.map()` whenever a
     /// document is put into the database. That is, these are the names of the
@@ -313,7 +313,7 @@ impl Database {
     /// emitting index key/value pairs appropriately. It will be invoked when
     /// (re)building an index from existing data.
     ///
-    pub fn new<I, N>(db_path: &Path, views: I, mapper: ByteMapper) -> Result<Self, Error>
+    pub fn open_default<I, N>(db_path: &Path, views: I, mapper: ByteMapper) -> Result<Self, Error>
     where
         I: IntoIterator<Item = N>,
         N: ToString,
@@ -322,15 +322,13 @@ impl Database {
         // Create the database files, but do not create the column families now,
         // as we will create them only when they are needed.
         opts.create_if_missing(true);
-        Database::with_opts(db_path, views, mapper, opts)
+        Database::open(db_path, views, mapper, opts)
     }
 
     ///
-    /// Create an instance of Database using the given path for storage.
+    /// Open the database with the specified options.
     ///
-    /// Like `new()` but the application controls the options.
-    ///
-    pub fn with_opts<I, N>(
+    pub fn open<I, N>(
         db_path: &Path,
         views: I,
         mapper: ByteMapper,
@@ -775,7 +773,7 @@ impl QueryResult {
 /// # }
 /// let db_path = "tmp/assets/database";
 /// let views = vec!["tags".to_owned()];
-/// let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+/// let mut dbase = Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
 /// let result = dbase.query_by_key("tags", b"cat");
 /// let iter = result.unwrap();
 /// for result in iter {
@@ -971,7 +969,8 @@ mod tests {
         let key = document.key.as_bytes();
         {
             // scope the database so we can drop it
-            let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+            let mut dbase =
+                Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
             let result = dbase.put(&key, &document);
             assert!(result.is_ok());
 
@@ -989,8 +988,7 @@ mod tests {
         // (and pass custom options, too, to test that constructor)
         let mut opts = Options::default();
         opts.create_if_missing(true);
-        let mut dbase =
-            Database::with_opts(Path::new(db_path), &views, Box::new(mapper), opts).unwrap();
+        let mut dbase = Database::open(Path::new(db_path), &views, Box::new(mapper), opts).unwrap();
         let result: Result<Option<LenVal>, Error> = dbase.get(&key);
         assert!(result.is_ok());
         let option = result.unwrap();
@@ -1008,6 +1006,33 @@ mod tests {
         // repeated delete is ok and not an error
         let result = dbase.delete(&key);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn open_threaded() {
+        // test in which we ensure the database is thread-safe merely by
+        // spawning a thread to access its contents
+        let db_path = "tmp/test/open_threaded";
+        let _ = fs::remove_dir_all(db_path);
+        let views = vec!["value".to_owned()];
+        use std::sync::{Arc, Mutex};
+        let refs: Mutex<HashMap<PathBuf, Arc<Database>>> = Mutex::new(HashMap::new());
+        let path: &Path = Path::new(db_path);
+        // scope to drop the references in this thread
+        {
+            let mut db_refs = refs.lock().unwrap();
+            let dbase = Database::open_default(path, &views, Box::new(mapper)).unwrap();
+            let arc = Arc::new(dbase);
+            let buf: PathBuf = path.to_path_buf();
+            db_refs.insert(buf, arc);
+        }
+        std::thread::spawn(move || {
+            let db_refs = refs.lock().unwrap();
+            if let Some(dbase) = db_refs.get(path) {
+                let result: Result<Option<LenVal>, Error> = dbase.get(b"foobar");
+                assert!(result.is_ok());
+            }
+        });
     }
 
     #[derive(Serialize, Deserialize)]
@@ -1058,7 +1083,8 @@ mod tests {
         let db_path = "tmp/test/asset_view_creation";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             key: String::from("as/cafebabe"),
             location: String::from("hawaii"),
@@ -1094,7 +1120,8 @@ mod tests {
         let db_path = "tmp/test/no_view_creation";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             // intentionally using a key that does not match anything in our mapper
             key: String::from("none/cafebabe"),
@@ -1117,7 +1144,8 @@ mod tests {
         let _ = fs::remove_dir_all(db_path);
         // intentionally passing an empty view name
         let views = vec!["".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             key: String::from("as/cafebabe"),
             location: String::from("hawaii"),
@@ -1139,7 +1167,8 @@ mod tests {
         let _ = fs::remove_dir_all(db_path);
         let views: Vec<String> = Vec::new();
         // intentionally passing an empty view list
-        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let document = Asset {
             key: String::from("as/cafebabe"),
             location: String::from("hawaii"),
@@ -1160,7 +1189,8 @@ mod tests {
         let db_path = "tmp/test/query_on_unknown_view";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["viewname".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let _ = dbase.query("nonesuch");
     }
 
@@ -1169,7 +1199,8 @@ mod tests {
         let db_path = "tmp/test/query_by_key";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/cafebabe"),
@@ -1254,7 +1285,7 @@ mod tests {
         let db_path = "tmp/test/query_by_key_separator";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+        let dbase = Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
         let sep = vec![0xff, 0xff, 0xff];
         let mut dbase = dbase.separator(&sep);
         let documents = [
@@ -1362,7 +1393,8 @@ mod tests {
         let db_path = "tmp/test/query_with_changes";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/cafebabe"),
@@ -1461,7 +1493,8 @@ mod tests {
         let db_path = "tmp/test/query_exact";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/onecat"),
@@ -1501,7 +1534,8 @@ mod tests {
         let db_path = "tmp/test/index_rebuild_delete";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned(), "location".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/blackcat"),
@@ -1573,7 +1607,8 @@ mod tests {
             // scope the database so we can drop it and open again with a
             // different set of views
             let views = vec!["tags".to_owned(), "location".to_owned()];
-            let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+            let mut dbase =
+                Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
             let documents = [
                 Asset {
                     key: String::from("as/blackcat"),
@@ -1635,7 +1670,8 @@ mod tests {
 
         // open the database again, but with a different set of views
         let views = vec!["tags".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
 
         // clean up the unknown index and verify it is gone
         let result = dbase.index_cleanup();
@@ -1654,7 +1690,8 @@ mod tests {
         let db_path = "tmp/test/query_all_keys";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/blackcat"),
@@ -1728,7 +1765,8 @@ mod tests {
         let db_path = "tmp/test/counting_keys";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["tags".to_owned()];
-        let mut dbase = Database::new(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
         let documents = [
             Asset {
                 key: String::from("as/blackcat"),
