@@ -515,7 +515,7 @@ impl Database {
     /// Query the index for documents that have all of the given keys.
     ///
     /// Unlike the other query functions, this one returns a single result per
-    /// document for each document that emitted all of the specified keys.
+    /// document for which it emitted all of the specified keys.
     ///
     /// This function is potentially memory intensive as it will query the index
     /// for each given key, combining all of the results in memory, and then
