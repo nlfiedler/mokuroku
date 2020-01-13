@@ -22,4 +22,4 @@ clap = "2.33.0"
 crypto-hash = "0.3.4"
 memmap = "0.7.0"
 serde = { version = "1.0", features = ["derive"] }
-serde_cbor = "0.10.1"
+serde_cbor = "0.11"
