@@ -80,7 +80,7 @@ Examples of the functions for generating the index keys and values are in
 ```rust
 let db_path = "my_database";
 let views = vec!["tags".to_owned()];
-let dbase = Database::new(Path::new(db_path), views, Box::new(mapper)).unwrap();
+let dbase = Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
 let documents = [
     Asset {
         key: String::from("asset/blackcat"),

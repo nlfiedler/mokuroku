@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019 Nathan Fiedler
+// Copyright (c) 2019-2020 Nathan Fiedler
 //
 
 //! ## Overview
@@ -66,7 +66,7 @@
 //! will need to rebuild the indices.
 
 use failure::{err_msg, Error};
-use rocksdb::{ColumnFamily, DBIterator, IteratorMode, Options, DB};
+use rocksdb::{ColumnFamily, DBIterator, Direction, IteratorMode, Options, DB};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt;
@@ -589,6 +589,35 @@ impl Database {
     }
 
     ///
+    /// Query an index by range of key values, returning those results whose key
+    /// is equal to or greater than the first key, and less than the second key.
+    ///
+    /// As with `query()`, if the index has not yet been built, it will be.
+    ///
+    pub fn query_range<K: AsRef<[u8]>>(
+        &mut self,
+        view: &str,
+        key_a: K,
+        key_b: K,
+    ) -> Result<QueryIterator, Error> {
+        let mrview = self.ensure_view_built(view)?;
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing view column family"))?;
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(key_a.as_ref(), Direction::Forward))?;
+        Ok(QueryIterator::new_range(
+            &self.db,
+            iter,
+            &self.key_sep,
+            cf,
+            key_b.as_ref(),
+        ))
+    }
+
+    ///
     /// Query on the given index, returning the number of rows whose key prefix
     /// matches the value given.
     ///
@@ -789,6 +818,8 @@ pub struct QueryIterator<'a> {
     dbiter: DBIterator<'a>,
     /// Key prefix to filter results, if any.
     prefix: Option<Vec<u8>>,
+    /// Upper bound of key range to iterate, if any.
+    upper: Option<Vec<u8>>,
     /// Index key separator sequence.
     key_sep: Vec<u8>,
     /// Column family for the index this query is based on.
@@ -805,6 +836,7 @@ impl<'a> QueryIterator<'a> {
             db,
             dbiter,
             prefix: None,
+            upper: None,
             key_sep: sep.to_owned(),
             cf,
             seq_len: u64_len,
@@ -825,6 +857,28 @@ impl<'a> QueryIterator<'a> {
             db,
             dbiter,
             prefix: Some(prefix.to_owned()),
+            upper: None,
+            key_sep: sep.to_owned(),
+            cf,
+            seq_len: u64_len,
+        }
+    }
+
+    /// Construct an iterator that stops when a row whose key is greater than or
+    /// equal to the upper bound key is encountered.
+    fn new_range(
+        db: &'a DB,
+        dbiter: DBIterator<'a>,
+        sep: &[u8],
+        cf: &'a ColumnFamily,
+        upper: &[u8],
+    ) -> Self {
+        let u64_len = std::mem::size_of::<u64>();
+        Self {
+            db,
+            dbiter,
+            prefix: None,
+            upper: Some(upper.to_owned()),
             key_sep: sep.to_owned(),
             cf,
             seq_len: u64_len,
@@ -893,6 +947,18 @@ impl<'a> Iterator for QueryIterator<'a> {
             // separate the index key from the primary key
             let sep_pos = self.find_separator(&key);
             let short_key = key[..sep_pos].to_vec();
+            if let Some(upper) = &self.upper {
+                // compare overlapping set of leading bytes with the index key
+                // and the upper bound key value
+                let overlap = if short_key.len() < upper.len() {
+                    short_key.len()
+                } else {
+                    upper.len()
+                };
+                if short_key[..overlap] >= upper[..overlap] {
+                    return None;
+                }
+            }
             let doc_id = key[sep_pos + self.key_sep.len()..].to_vec();
             let seq = value[..self.seq_len].to_vec();
             if self.is_stale(&doc_id, &seq) {
@@ -1527,6 +1593,98 @@ mod tests {
         assert_eq!(count_index_exact(&mut dbase, "tags", b"cat"), 1);
         assert_eq!(count_index_exact(&mut dbase, "tags", b"orange"), 1);
         assert_eq!(count_index_exact(&mut dbase, "tags", b"tail"), 1);
+    }
+
+    #[allow(clippy::cognitive_complexity)]
+    #[test]
+    fn query_range_text() {
+        let db_path = "tmp/test/query_range";
+        let _ = fs::remove_dir_all(db_path);
+        let fruits = [
+            "apple",
+            "avocado",
+            "banana",
+            "cantaloupe",
+            "durian",
+            "grape",
+            "lemon",
+            "mandarin",
+            "mango",
+            "orange",
+            "peach",
+            "pear",
+            "strawberry",
+            "tangerine",
+            "watermelon",
+        ];
+        let views = vec!["value".to_owned()];
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        for (idx, fruit_name) in fruits.iter().enumerate() {
+            let key = format!("lv/fruit{}", idx);
+            let document = LenVal {
+                key,
+                len: fruit_name.len(),
+                val: String::from(*fruit_name),
+            };
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, &document);
+            assert!(result.is_ok());
+        }
+
+        // query for rows that are right in the middle somewhere
+        let result = dbase.query_range("value", "grape", "pear");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 6);
+        assert_eq!(results[0].key.as_ref(), b"grape");
+        assert_eq!(results[1].key.as_ref(), b"lemon");
+        assert_eq!(results[2].key.as_ref(), b"mandarin");
+        assert_eq!(results[3].key.as_ref(), b"mango");
+        assert_eq!(results[4].key.as_ref(), b"orange");
+        assert_eq!(results[5].key.as_ref(), b"peach");
+
+        // test with lower/upper that do not appear in the index
+        let result = dbase.query_range("value", "dog", "men");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0].key.as_ref(), b"durian");
+        assert_eq!(results[1].key.as_ref(), b"grape");
+        assert_eq!(results[2].key.as_ref(), b"lemon");
+        assert_eq!(results[3].key.as_ref(), b"mandarin");
+        assert_eq!(results[4].key.as_ref(), b"mango");
+
+        // test with lower that precedes the "first" index key
+        let result = dbase.query_range("value", "aaaaaaaa", "durian");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].key.as_ref(), b"apple");
+        assert_eq!(results[1].key.as_ref(), b"avocado");
+        assert_eq!(results[2].key.as_ref(), b"banana");
+        assert_eq!(results[3].key.as_ref(), b"cantaloupe");
+
+        // test with upper that follows the "last" index key
+        let result = dbase.query_range("value", "pear", "xylophone");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].key.as_ref(), b"pear");
+        assert_eq!(results[1].key.as_ref(), b"strawberry");
+        assert_eq!(results[2].key.as_ref(), b"tangerine");
+        assert_eq!(results[3].key.as_ref(), b"watermelon");
+
+        // query in which nothing is returned
+        let result = dbase.query_range("value", "eeeee", "fffff");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 0);
     }
 
     #[test]
