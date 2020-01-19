@@ -70,6 +70,19 @@ specific key values.
 $ cargo run --example tagged
 ```
 
+An example demonstrating numeric indices, `examples/numdex.rs`, utilizes the
+bitwise sort order preservation of
+[base32hex](https://en.wikipedia.org/wiki/Base32#base32hex), which also has the
+benefit of making the numeric keys "safe" for the composite key format of the
+secondary index. The key in the `numdex` index is the UTC milliseconds, and the
+query is for assets updated within a specific date range. Both the index keys
+and the query keys must be encoded, and it helps for the numbers to be in
+[Big-endian](https://en.wikipedia.org/wiki/Endianness#Big-endian) order.
+
+```shell
+$ cargo run --example numdex
+```
+
 ### Quick Example
 
 This code snippet is lifted from the aforementioned example. It shows the most

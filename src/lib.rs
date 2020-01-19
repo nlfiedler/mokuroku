@@ -72,6 +72,8 @@ use std::convert::TryInto;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod base32;
+
 ///
 /// `Document` defines operations required for building the index.
 ///
@@ -1598,7 +1600,7 @@ mod tests {
     #[allow(clippy::cognitive_complexity)]
     #[test]
     fn query_range_text() {
-        let db_path = "tmp/test/query_range";
+        let db_path = "tmp/test/query_range_text";
         let _ = fs::remove_dir_all(db_path);
         let fruits = [
             "apple",
@@ -1685,6 +1687,54 @@ mod tests {
         let iter = result.unwrap();
         let results: Vec<QueryResult> = iter.collect();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn query_range_number() {
+        let db_path = "tmp/test/query_range_number";
+        let _ = fs::remove_dir_all(db_path);
+        let views = vec!["value".to_owned()];
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        // we're being cheap here and encoding the index keys in the document,
+        // where normally it would be the mapper that does the encoding
+        for idx in 1..100 {
+            let num: u64 = idx * 100;
+            let bytes = num.to_be_bytes().to_vec();
+            let encoded = base32::encode(&bytes);
+            let key = format!("lv/number{}", idx);
+            let document = LenVal {
+                key,
+                len: 8,
+                val: str::from_utf8(&encoded[..]).unwrap().to_owned(),
+            };
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, &document);
+            assert!(result.is_ok());
+        }
+
+        // query for values between 500 and 1500 where the index keys are
+        // base32hex encoded so that they sort as expected and the default
+        // separator character still works
+        let raw: Vec<u8> = 500u64.to_be_bytes().to_vec();
+        let enca = base32::encode(&raw);
+        let raw: Vec<u8> = 1500u64.to_be_bytes().to_vec();
+        let encb = base32::encode(&raw);
+        let result = dbase.query_range("value", &enca, &encb);
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 10);
+        assert_eq!(results[0].key.as_ref(), b"00000000000V8==="); // 500
+        assert_eq!(results[1].key.as_ref(), b"000000000015G==="); // 600
+        assert_eq!(results[2].key.as_ref(), b"00000000001BO==="); // 700
+        assert_eq!(results[3].key.as_ref(), b"00000000001I0==="); // 800
+        assert_eq!(results[4].key.as_ref(), b"00000000001O8==="); // 900
+        assert_eq!(results[5].key.as_ref(), b"00000000001UG==="); // 1000
+        assert_eq!(results[6].key.as_ref(), b"000000000024O==="); // 1100
+        assert_eq!(results[7].key.as_ref(), b"00000000002B0==="); // 1200
+        assert_eq!(results[8].key.as_ref(), b"00000000002H8==="); // 1300
+        assert_eq!(results[9].key.as_ref(), b"00000000002NG==="); // 1400
     }
 
     #[test]

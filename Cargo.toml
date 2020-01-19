@@ -6,7 +6,7 @@ edition = "2018"
 description = "Secondary indices like PouchDB for RocksDB in Rust."
 repository = "https://github.com/nlfiedler/mokuroku"
 readme = "README.md"
-keywords = ["database", "index", "pouchdb", "rocksdb", "search"]
+keywords = ["database", "index", "rocksdb", "search"]
 license = "Apache-2.0"
 exclude = [
     "TODO.org",
@@ -19,7 +19,9 @@ rocksdb = "0.13.0"
 
 [dev-dependencies]
 clap = "2.33.0"
+chrono = { version = "0.4", features = ["serde"] }
 crypto-hash = "0.3.4"
 memmap = "0.7.0"
+rand = "0.7.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_cbor = "0.11"
