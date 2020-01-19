@@ -10,7 +10,7 @@ This file follows the convention described at
 - Add `query_range()` to query an index for keys between A and B.
 - Add `base32` module with base32hex implementation to support numeric keys.
 
-## [2.0.0] - 2019-12-23
+## [2.0.0] - 2020-01-13
 ### Changed
 - Rename `new()` to `open_default()`, and `with_opts()` to `open()`, to better
   reflect the RocksDB function names.
