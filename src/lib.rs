@@ -9,7 +9,7 @@
 //! optional values are provided by your application. Once an index has been
 //! defined, queries for all entries, or those whose keys match a given prefix,
 //! can be performed. The index is kept up-to-date as data records, the data
-//! your application is storing in the database, are changed and/or deleted.
+//! your application is storing in the database, are updated or deleted.
 //!
 //! ## Usage
 //!
@@ -39,12 +39,7 @@
 //! Due to a change in the Rust wrapper for RocksDB, the database reference must
 //! be mutable in order to make changes to the column families. This library
 //! makes many such changes, and as a result most of the methods require that
-//! the database reference is mutable. It was that or try to very carefully use
-//! a `RwLock` to hide the mutable `DB`, but that proved to be rather tricky to
-//! get right (it is very easy to get a read lock and then call another function
-//! which attempts to get a write lock -- instant dead-lock). The mutable
-//! approach is safer and is simply passing along the change that the `rocksdb`
-//! crate made.
+//! the database reference is mutable.
 //!
 //! ## Data Model
 //!
@@ -58,12 +53,20 @@
 //!
 //! **N.B.** The index key emitted by the application is combined with the data
 //! record primary key, separated by a single null byte. Using a separator is
-//! necessary since the library does not know in advance how long either of
-//! these keys is expected to be, and the index query depends heavily on using
-//! the prefix iterator to speed up the search. If you want to specify a
-//! different separator, use the `Database.separator()` function when opening
-//! the database. If at some later time you decide to change the separator, you
-//! will need to rebuild the indices.
+//! necessary since the library does not know the length or format of these keys
+//! in advance, and the index query depends heavily on using the prefix iterator
+//! to speed up the search. If you want to specify a different separator, use
+//! the `Database.separator()` function when opening the database. If at some
+//! later time you decide to change the separator, you will need to rebuild the
+//! indices.
+//!
+//! ### Numeric Index Keys
+//!
+//! To use numeric index keys, a reasonable approach is to use a value in
+//! Big-endian order and encode the value as base32hex using the functions in
+//! the `base32` module provided in this crate. Doing so will allow for range
+//! queries on the numeric key, but keep in mind that the query keys must also
+//! be in Big-endian order and base32hex encoded.
 
 use failure::{err_msg, Error};
 use rocksdb::{ColumnFamily, DBIterator, Direction, IteratorMode, Options, DB};
@@ -85,7 +88,7 @@ pub mod base32;
 /// instance of `Document`, there is no need to deserialize the value when
 /// calling `map()`, since it is already in its natural form. The `map()`
 /// function will eventually receive every view name that was initially provided
-/// to `Database::open_default()`, and it is up to each `Document` implementation to
+/// when opening the database, and it is up to each `Document` implementation to
 /// ignore views that are not relevant.
 ///
 /// This example is using the [serde](https://crates.io/crates/serde) crate,
@@ -307,8 +310,8 @@ impl Database {
     ///
     /// Open a database with default options.
     ///
-    /// The set of view names are passed to the `Document.map()` whenever a
-    /// document is put into the database. That is, these are the names of the
+    /// The set of view names are passed to `Document.map()` whenever a document
+    /// is `put()` into the database. That is, these are the names of the
     /// indices that will be updated whenever a document is stored.
     ///
     /// The `ByteMapper` is responsible for deserializing any type of record and
@@ -328,7 +331,7 @@ impl Database {
     }
 
     ///
-    /// Open the database with the specified options.
+    /// Open the database with the specified database options.
     ///
     pub fn open<I, N>(
         db_path: &Path,
@@ -364,9 +367,10 @@ impl Database {
     /// Set the byte sequence used to separate index key from primary key.
     ///
     /// This sets the separator byte sequence used to separate the index key
-    /// from the primary data record key in the index. The default is a single
-    /// null byte. Note that changing the separator sequence may invalidate any
-    /// previously built indices.
+    /// from the primary data record key in the index. _The default is a single
+    /// null byte._ Note that changing the separator sequence will likely
+    /// invalidate any previously built indices, and thus the application should
+    /// call `rebuild()` for every defined view.
     ///
     pub fn separator(mut self, sep: &[u8]) -> Self {
         if sep.is_empty() {
