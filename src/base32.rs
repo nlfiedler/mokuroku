@@ -199,10 +199,10 @@ mod test {
         assert_eq!(decode(b","), None);
         assert_eq!(decode(b"!"), None);
         assert_eq!(decode(b"?"), None);
-        assert_eq!(decode(b"v"), None);
-        assert_eq!(decode(b"x"), None);
-        assert_eq!(decode(b"y"), None);
-        assert_eq!(decode(b"z"), None);
+        assert_eq!(decode(b"CPNMW"), None);
+        assert_eq!(decode(b"CPNMX"), None);
+        assert_eq!(decode(b"CPNMY"), None);
+        assert_eq!(decode(b"CPNMZ"), None);
     }
 
     #[test]
