@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
-## Unreleased
+## [2.1.1] - 2020-04-24
 ### Changed
 - Upgrade to `rust-rocksdb` 0.14.0 release.
 
