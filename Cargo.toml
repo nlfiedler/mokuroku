@@ -15,7 +15,7 @@ exclude = [
 
 [dependencies]
 failure = "0.1.5"
-rocksdb = "0.13.0"
+rocksdb = "0.14.0"
 
 [dev-dependencies]
 clap = "2.33.0"

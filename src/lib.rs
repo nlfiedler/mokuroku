@@ -485,7 +485,7 @@ impl Database {
             .db
             .cf_handle(&mrview)
             .ok_or_else(|| err_msg("missing view column family"))?;
-        let iter = self.db.iterator_cf(&cf, IteratorMode::Start)?;
+        let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
         Ok(QueryIterator::new(&self.db, iter, &self.key_sep, &cf))
     }
 
@@ -507,7 +507,7 @@ impl Database {
             .db
             .cf_handle(&mrview)
             .ok_or_else(|| err_msg("missing view column family"))?;
-        let iter = self.db.prefix_iterator_cf(&cf, key.as_ref())?;
+        let iter = self.db.prefix_iterator_cf(&cf, key.as_ref());
         Ok(QueryIterator::new_prefix(
             &self.db,
             iter,
@@ -584,7 +584,7 @@ impl Database {
             .db
             .cf_handle(&mrview)
             .ok_or_else(|| err_msg("missing view column family"))?;
-        let iter = self.db.prefix_iterator_cf(&cf, &prefix)?;
+        let iter = self.db.prefix_iterator_cf(&cf, &prefix);
         Ok(QueryIterator::new_prefix(
             &self.db,
             iter,
@@ -613,7 +613,7 @@ impl Database {
             .ok_or_else(|| err_msg("missing view column family"))?;
         let iter = self
             .db
-            .iterator_cf(&cf, IteratorMode::From(key_a.as_ref(), Direction::Forward))?;
+            .iterator_cf(&cf, IteratorMode::From(key_a.as_ref(), Direction::Forward));
         Ok(QueryIterator::new_range(
             &self.db,
             iter,
@@ -1454,9 +1454,7 @@ mod tests {
             .ok_or_else(|| err_msg("missing column family"));
         assert!(result.is_ok());
         let cf = result.unwrap();
-        let result = db.iterator_cf(cf, IteratorMode::Start);
-        assert!(result.is_ok());
-        let iter = result.unwrap();
+        let iter = db.iterator_cf(cf, IteratorMode::Start);
         iter.count()
     }
 
