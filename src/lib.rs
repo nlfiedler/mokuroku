@@ -624,6 +624,54 @@ impl Database {
     }
 
     ///
+    /// Query on the given index, returning those results whose key is *equal*
+    /// to or *greater than* the key.
+    ///
+    /// As with `query()`, if the index has not yet been built, it will be.
+    ///
+    pub fn query_greater_than<K: AsRef<[u8]>>(
+        &mut self,
+        view: &str,
+        key: K,
+    ) -> Result<QueryIterator, Error> {
+        let mrview = self.ensure_view_built(view)?;
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing view column family"))?;
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(key.as_ref(), Direction::Forward));
+        Ok(QueryIterator::new(&self.db, iter, &self.key_sep, cf))
+    }
+
+    ///
+    /// Query on the given index, returning those results whose key strictly
+    /// *less than* the key.
+    ///
+    /// As with `query()`, if the index has not yet been built, it will be.
+    ///
+    pub fn query_less_than<K: AsRef<[u8]>>(
+        &mut self,
+        view: &str,
+        key: K,
+    ) -> Result<QueryIterator, Error> {
+        let mrview = self.ensure_view_built(view)?;
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing view column family"))?;
+        let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
+        Ok(QueryIterator::new_range(
+            &self.db,
+            iter,
+            &self.key_sep,
+            cf,
+            key.as_ref(),
+        ))
+    }
+
+    ///
     /// Query on the given index, returning the number of rows whose key prefix
     /// matches the value given.
     ///
@@ -1689,6 +1737,108 @@ mod tests {
         let iter = result.unwrap();
         let results: Vec<QueryResult> = iter.collect();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn query_greater_than() {
+        let db_path = "tmp/test/query_greater_than";
+        let _ = fs::remove_dir_all(db_path);
+        let fruits = [
+            "apple",
+            "avocado",
+            "banana",
+            "cantaloupe",
+            "durian",
+            "grape",
+            "lemon",
+            "mandarin",
+            "mango",
+            "orange",
+            "peach",
+            "pear",
+            "strawberry",
+            "tangerine",
+            "watermelon",
+        ];
+        let views = vec!["value".to_owned()];
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        for (idx, fruit_name) in fruits.iter().enumerate() {
+            let key = format!("lv/fruit{}", idx);
+            let document = LenVal {
+                key,
+                len: fruit_name.len(),
+                val: String::from(*fruit_name),
+            };
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, &document);
+            assert!(result.is_ok());
+        }
+
+        // query for rows starting past the middle
+        let result = dbase.query_greater_than("value", "mango");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 7);
+        assert_eq!(results[0].key.as_ref(), b"mango");
+        assert_eq!(results[1].key.as_ref(), b"orange");
+        assert_eq!(results[2].key.as_ref(), b"peach");
+        assert_eq!(results[3].key.as_ref(), b"pear");
+        assert_eq!(results[4].key.as_ref(), b"strawberry");
+        assert_eq!(results[5].key.as_ref(), b"tangerine");
+        assert_eq!(results[6].key.as_ref(), b"watermelon");
+    }
+
+    #[test]
+    fn query_less_than() {
+        let db_path = "tmp/test/query_less_than";
+        let _ = fs::remove_dir_all(db_path);
+        let fruits = [
+            "apple",
+            "avocado",
+            "banana",
+            "cantaloupe",
+            "durian",
+            "grape",
+            "lemon",
+            "mandarin",
+            "mango",
+            "orange",
+            "peach",
+            "pear",
+            "strawberry",
+            "tangerine",
+            "watermelon",
+        ];
+        let views = vec!["value".to_owned()];
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        for (idx, fruit_name) in fruits.iter().enumerate() {
+            let key = format!("lv/fruit{}", idx);
+            let document = LenVal {
+                key,
+                len: fruit_name.len(),
+                val: String::from(*fruit_name),
+            };
+            let key = document.key.as_bytes();
+            let result = dbase.put(&key, &document);
+            assert!(result.is_ok());
+        }
+
+        // query for rows ending near the middle
+        let result = dbase.query_less_than("value", "mandarin");
+        assert!(result.is_ok());
+        let iter = result.unwrap();
+        let results: Vec<QueryResult> = iter.collect();
+        assert_eq!(results.len(), 7);
+        assert_eq!(results[0].key.as_ref(), b"apple");
+        assert_eq!(results[1].key.as_ref(), b"avocado");
+        assert_eq!(results[2].key.as_ref(), b"banana");
+        assert_eq!(results[3].key.as_ref(), b"cantaloupe");
+        assert_eq!(results[4].key.as_ref(), b"durian");
+        assert_eq!(results[5].key.as_ref(), b"grape");
+        assert_eq!(results[6].key.as_ref(), b"lemon");
     }
 
     #[test]
