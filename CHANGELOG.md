@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [2.2.0] - 2020-04-29
 ### Added
 - `query_greater_than()` like `query_range()` with only the lower key.
 - `query_less_than()` like `query_range()` with only the upper key.

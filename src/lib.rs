@@ -598,6 +598,9 @@ impl Database {
     /// Query an index by range of key values, returning those results whose key
     /// is equal to or greater than the first key, and less than the second key.
     ///
+    /// See also `query_greater_than()` and `query_less_than()` for querying
+    /// with only the lower or upper bound.
+    ///
     /// As with `query()`, if the index has not yet been built, it will be.
     ///
     pub fn query_range<K: AsRef<[u8]>>(
@@ -627,6 +630,8 @@ impl Database {
     /// Query on the given index, returning those results whose key is *equal*
     /// to or *greater than* the key.
     ///
+    /// See also `query_range()` and `query_less_than()`.
+    ///
     /// As with `query()`, if the index has not yet been built, it will be.
     ///
     pub fn query_greater_than<K: AsRef<[u8]>>(
@@ -648,6 +653,8 @@ impl Database {
     ///
     /// Query on the given index, returning those results whose key strictly
     /// *less than* the key.
+    ///
+    /// See also `query_range()` and `query_greater_than()`.
     ///
     /// As with `query()`, if the index has not yet been built, it will be.
     ///
