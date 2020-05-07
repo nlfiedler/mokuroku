@@ -344,11 +344,8 @@ impl Database {
         N: ToString,
     {
         let myviews: Vec<String> = views.into_iter().map(|ts| N::to_string(&ts)).collect();
-        let cfs = if db_path.exists() {
-            DB::list_cf(&opts, db_path)?
-        } else {
-            vec![]
-        };
+        // quietly try to read the column families
+        let cfs = DB::list_cf(&opts, db_path).unwrap_or_else(|_| vec![]);
         let db = if cfs.is_empty() {
             DB::open(&opts, db_path)?
         } else {
@@ -1133,6 +1130,18 @@ mod tests {
         // repeated delete is ok and not an error
         let result = dbase.delete(&key);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn open_existing_empty() {
+        // test opening a database in which the directory is empty
+        let db_path = "tmp/test/open_existing_empty";
+        let _ = fs::remove_dir_all(db_path);
+        let _ = fs::create_dir_all(db_path);
+        let views = vec!["value".to_owned()];
+        let path: &Path = Path::new(db_path);
+        let result = Database::open_default(path, &views, Box::new(mapper));
+        assert!(result.is_ok(), "opened database successfully");
     }
 
     #[test]

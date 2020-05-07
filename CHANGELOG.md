@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [2.2.1] - 2020-05-06
+### Fixed
+- Opening database with only an empty directory would fail (issue #7).
+
 ## [2.2.0] - 2020-04-29
 ### Added
 - `query_greater_than()` like `query_range()` with only the lower key.
