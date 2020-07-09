@@ -488,7 +488,7 @@ impl Database {
 
     ///
     /// Query on the given index, returning those results whose key prefix
-    /// matches the value given.
+    /// matches the value given, with the keys in **ascending** order.
     ///
     /// Only those index keys with a matching prefix will be returned.
     ///
@@ -673,6 +673,28 @@ impl Database {
             cf,
             key.as_ref(),
         ))
+    }
+
+    ///
+    /// Query on the given index, returning those results whose key is less than
+    /// the given value, with the keys in **descending** order.
+    ///
+    /// As with `query()`, if the index has not yet been built, it will be.
+    ///
+    pub fn query_desc<K: AsRef<[u8]>>(
+        &mut self,
+        view: &str,
+        key: K,
+    ) -> Result<QueryIterator, Error> {
+        let mrview = self.ensure_view_built(view)?;
+        let cf = self
+            .db
+            .cf_handle(&mrview)
+            .ok_or_else(|| err_msg("missing view column family"))?;
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(key.as_ref(), Direction::Reverse));
+        Ok(QueryIterator::new(&self.db, iter, &self.key_sep, cf))
     }
 
     ///
@@ -1357,11 +1379,38 @@ mod tests {
                 ],
             },
             Asset {
+                key: String::from("as/xxxyyyzz"),
+                location: String::from("london"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("orange"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
+                key: String::from("as/mmmnnnoo"),
+                location: String::from("new york"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("orange"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
+                key: String::from("as/jjjkkkll"),
+                location: String::from("san diego"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
                 key: String::from("as/1badb002"),
                 location: String::from("hakone"),
                 tags: vec![
                     String::from("cat"),
-                    String::from("white"),
+                    String::from("black"),
                     String::from("ears"),
                 ],
             },
@@ -1381,7 +1430,7 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        assert_eq!(count_index(&mut dbase, "tags"), 12);
+        assert_eq!(count_index(&mut dbase, "tags"), 21);
         assert_eq!(count_index_by_query(&mut dbase, "tags", b"nonesuch"), 0);
 
         // querying by a specific tag: cat
@@ -1389,30 +1438,34 @@ mod tests {
         assert!(result.is_ok());
         let iter = result.unwrap();
         let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 5);
         assert!(results.iter().all(|r| r.key.as_ref() == b"cat"));
         let keys: Vec<String> = results
             .iter()
             .map(|r| str::from_utf8(&r.doc_id).unwrap().to_owned())
             .collect();
-        assert_eq!(keys.len(), 2);
-        assert!(keys.contains(&String::from("as/cafebabe")));
-        assert!(keys.contains(&String::from("as/1badb002")));
+        assert_eq!(keys.len(), 5);
+        assert_eq!(keys[0], "as/1badb002");
+        assert_eq!(keys[1], "as/cafebabe");
+        assert_eq!(keys[2], "as/jjjkkkll");
+        assert_eq!(keys[3], "as/mmmnnnoo");
+        assert_eq!(keys[4], "as/xxxyyyzz");
 
-        // querying by a specific tag: white
-        let result = dbase.query_by_key("tags", b"white");
+        // querying in reverse (descending) order
+        let result = dbase.query_desc("tags", b"cat");
         assert!(result.is_ok());
         let iter = result.unwrap();
         let results: Vec<QueryResult> = iter.collect();
-        assert_eq!(results.len(), 2);
-        assert!(results.iter().all(|r| r.key.as_ref() == b"white"));
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|r| r.key.as_ref() == b"black"));
         let keys: Vec<String> = results
             .iter()
             .map(|r| str::from_utf8(&r.doc_id).unwrap().to_owned())
             .collect();
-        assert_eq!(keys.len(), 2);
-        assert!(keys.contains(&String::from("as/baadf00d")));
-        assert!(keys.contains(&String::from("as/1badb002")));
+        assert_eq!(keys.len(), 3);
+        assert_eq!(keys[0], "as/cafed00d");
+        assert_eq!(keys[1], "as/cafebabe");
+        assert_eq!(keys[2], "as/1badb002");
     }
 
     #[test]
