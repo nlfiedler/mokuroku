@@ -1,6 +1,6 @@
 [package]
 name = "mokuroku"
-version = "2.2.1"
+version = "2.3.0"
 authors = ["Nathan Fiedler <nathanfiedler@fastmail.fm>"]
 edition = "2018"
 description = "Secondary indices like PouchDB for RocksDB in Rust."

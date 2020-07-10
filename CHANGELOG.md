@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [2.3.0] - 2020-07-09
+### Added
+- `query_desc()` to iterate index in reverse order from given key.
+
 ## [2.2.1] - 2020-05-06
 ### Fixed
 - Opening database with only an empty directory would fail (issue #7).
