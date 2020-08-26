@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [2.4.0] - 2020-08-25
+### Added
+- Upgrade to `rust-rocksdb` 0.15.0 release.
+
 ## [2.3.0] - 2020-07-09
 ### Added
 - `query_desc()` to iterate index in reverse order from given key.

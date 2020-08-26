@@ -31,7 +31,7 @@ This description from [3] nicely captures the overall performance:
 > secondary key, which can be implemented using regular range search on the
 > index table. Here, writes and compactions are faster than "Lazy," but
 > secondary attribute lookup may be slower as it needs to perform a range scan
-> on the index table. 
+> on the index table.
 
 One difference from a simple composite index is that this library permits the
 application to emit a value along with the secondary key, in place of the `null`
