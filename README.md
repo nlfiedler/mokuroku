@@ -62,33 +62,8 @@ $ cargo test
 
 ### Apple M1 Support
 
-#### Latest Release
-
-Using the mokuroku crate requires building
-[rust-rocksdb](https://crates.io/crates/rocksdb), which in turn depends on
-building RocksDB from source. Some minor changes were necessary in RocksDB and
-rust-rocksdb in order to build on the Apple M1 processor. These changes were
-merged in pull request
-[#503](https://github.com/rust-rocksdb/rust-rocksdb/pull/503), and as of
-2021-03-19 are not yet released.
-
-To work-around this for the time being, you can install the x86_64 Rust
-toolchain and build using that:
-
-```shell
-rustup toolchain install stable-x86_64-apple-darwin
-cargo build --target x86_64-apple-darwin
-```
-
-However, other crates may have trouble building with such a setup, in which case
-you may want to use the latest changes on the `master` branch and build using
-the ARM64 compiler.
-
-#### Master Branch
-
-The latest changes on the `master` branch include changing the rust-rocksdb
-dependency to pull from its master branch, allowing for the build to succeed
-with the `aarch64-apple-darwin` target.
+With the 0.16 release of [rust-rocksdb](https://crates.io/crates/rocksdb) this
+library supports building using the ARM64 target on the macOS platform.
 
 ## Examples
 
