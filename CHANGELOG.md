@@ -5,8 +5,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+### Changed
+- Upgrade to `rust-rocksdb` 0.16.0 release with ARM64 support (on Mac).
+
 ## [2.4.0] - 2020-08-25
-### Added
+### Changed
 - Upgrade to `rust-rocksdb` 0.15.0 release.
 
 ## [2.3.0] - 2020-07-09

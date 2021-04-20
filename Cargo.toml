@@ -15,7 +15,7 @@ exclude = [
 
 [dependencies]
 failure = "0.1.5"
-rocksdb = { git = "https://github.com/rust-rocksdb/rust-rocksdb.git" }
+rocksdb = "0.16.0"
 
 [dev-dependencies]
 clap = "2.33.0"

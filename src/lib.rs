@@ -482,7 +482,7 @@ impl Database {
             .db
             .cf_handle(&mrview)
             .ok_or_else(|| err_msg("missing view column family"))?;
-        let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
+        let iter = self.db.iterator_cf(cf, IteratorMode::Start);
         Ok(QueryIterator::new(&self.db, iter, &self.key_sep, &cf))
     }
 
@@ -504,7 +504,7 @@ impl Database {
             .db
             .cf_handle(&mrview)
             .ok_or_else(|| err_msg("missing view column family"))?;
-        let iter = self.db.prefix_iterator_cf(&cf, key.as_ref());
+        let iter = self.db.prefix_iterator_cf(cf, key.as_ref());
         Ok(QueryIterator::new_prefix(
             &self.db,
             iter,
@@ -581,7 +581,7 @@ impl Database {
             .db
             .cf_handle(&mrview)
             .ok_or_else(|| err_msg("missing view column family"))?;
-        let iter = self.db.prefix_iterator_cf(&cf, &prefix);
+        let iter = self.db.prefix_iterator_cf(cf, &prefix);
         Ok(QueryIterator::new_prefix(
             &self.db,
             iter,
@@ -613,7 +613,7 @@ impl Database {
             .ok_or_else(|| err_msg("missing view column family"))?;
         let iter = self
             .db
-            .iterator_cf(&cf, IteratorMode::From(key_a.as_ref(), Direction::Forward));
+            .iterator_cf(cf, IteratorMode::From(key_a.as_ref(), Direction::Forward));
         Ok(QueryIterator::new_range(
             &self.db,
             iter,
@@ -643,7 +643,7 @@ impl Database {
             .ok_or_else(|| err_msg("missing view column family"))?;
         let iter = self
             .db
-            .iterator_cf(&cf, IteratorMode::From(key.as_ref(), Direction::Forward));
+            .iterator_cf(cf, IteratorMode::From(key.as_ref(), Direction::Forward));
         Ok(QueryIterator::new(&self.db, iter, &self.key_sep, cf))
     }
 
@@ -665,7 +665,7 @@ impl Database {
             .db
             .cf_handle(&mrview)
             .ok_or_else(|| err_msg("missing view column family"))?;
-        let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
+        let iter = self.db.iterator_cf(cf, IteratorMode::Start);
         Ok(QueryIterator::new_range(
             &self.db,
             iter,
@@ -693,7 +693,7 @@ impl Database {
             .ok_or_else(|| err_msg("missing view column family"))?;
         let iter = self
             .db
-            .iterator_cf(&cf, IteratorMode::From(key.as_ref(), Direction::Reverse));
+            .iterator_cf(cf, IteratorMode::From(key.as_ref(), Direction::Reverse));
         Ok(QueryIterator::new(&self.db, iter, &self.key_sep, cf))
     }
 
@@ -1044,7 +1044,7 @@ impl<'a> Iterator for QueryIterator<'a> {
             if self.is_stale(&doc_id, &seq) {
                 // prune the stale entry so we never see it again
                 // n.b. the result is Ok even if the record never existed
-                let _ = self.db.delete_cf(&self.cf, key);
+                let _ = self.db.delete_cf(self.cf, key);
             } else {
                 // lop off the sequence number from the index value
                 let ivalue = value[self.seq_len..].to_vec();
