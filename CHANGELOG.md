@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [3.0.0] - 2022-02-12
+### BREAKING CHANGES
+- Remove `failure` dependency and introduce `Error` type instead.
+
 ## [2.7.0] - 2022-02-12
 ### Changed
 - Upgrade to `rust-rocksdb` 0.18.0 release.

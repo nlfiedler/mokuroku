@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019-2020 Nathan Fiedler
+// Copyright (c) 2019-2022 Nathan Fiedler
 //
 
 //! ## Overview
@@ -22,9 +22,8 @@
 //! additional examples.
 //!
 //! ```no_run
-//! # use failure::Error;
-//! # use mokuroku::*;
 //! # use std::path::Path;
+//! # use mokuroku::*;
 //! fn mapper(key: &[u8], value: &[u8], view: &str, emitter: &Emitter) -> Result<(), Error> {
 //!     // ... call emitter.emit() with index keys and optional values
 //!     Ok(())
@@ -68,12 +67,29 @@
 //! queries on the numeric key, but keep in mind that the query keys must also
 //! be in Big-endian order and base32hex encoded.
 
-use failure::{err_msg, Error};
 use rocksdb::{ColumnFamily, DBIterator, Direction, IteratorMode, Options, DB};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt;
 use std::path::{Path, PathBuf};
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("missing changes column family")]
+    MissingChanges,
+    #[error("missing column family {0}")]
+    MissingColumn(String),
+    #[error("missing view column family")]
+    MissingView,
+    #[error("RocksDB database error")]
+    RocksDB(#[from] rocksdb::Error),
+    #[error("serialization error: {0}")]
+    Serde(String),
+    #[error("UTF-8 conversion error")]
+    Utf8(#[from] std::str::Utf8Error),
+    #[error("unknown data store error")]
+    Unknown,
+}
 
 pub mod base32;
 
@@ -95,7 +111,6 @@ pub mod base32;
 /// which provides the `Serialize` and `Deserialize` derivations.
 ///
 /// ```no_run
-/// # use failure::Error;
 /// # use mokuroku::*;
 /// # use serde::{Deserialize, Serialize};
 /// # use std::str;
@@ -109,13 +124,13 @@ pub mod base32;
 ///
 /// impl Document for Asset {
 ///     fn from_bytes(key: &[u8], value: &[u8]) -> Result<Self, Error> {
-///         let mut serde_result: Asset = serde_cbor::from_slice(value)?;
+///         let mut serde_result: Asset = serde_cbor::from_slice(value).map_err(|err| Error::Serde(format!("{}", err)))?;
 ///         serde_result.key = str::from_utf8(key)?.to_owned();
 ///         Ok(serde_result)
 ///     }
 ///
 ///     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-///         let encoded: Vec<u8> = serde_cbor::to_vec(self)?;
+///         let encoded: Vec<u8> = serde_cbor::to_vec(self).map_err(|err| Error::Serde(format!("{}", err)))?;
 ///         Ok(encoded)
 ///     }
 ///
@@ -168,7 +183,6 @@ pub trait Document: Sized {
 /// which `Document` implementation to use.
 ///
 /// ```no_run
-/// # use failure::Error;
 /// # use mokuroku::*;
 /// # struct Asset {}
 /// # impl Document for Asset {
@@ -461,7 +475,7 @@ impl Database {
                 self.db.create_cf(CHANGES_CF, &opts)?;
                 self.db
                     .cf_handle(CHANGES_CF)
-                    .ok_or_else(|| err_msg("missing changes column family"))?
+                    .ok_or_else(|| Error::MissingChanges)?
             }
             Some(cf) => cf,
         };
@@ -481,7 +495,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing view column family"))?;
+            .ok_or_else(|| Error::MissingView)?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start);
         Ok(QueryIterator::new(&self.db, iter, &self.key_sep, &cf))
     }
@@ -503,7 +517,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing view column family"))?;
+            .ok_or_else(|| Error::MissingView)?;
         let iter = self.db.prefix_iterator_cf(cf, key.as_ref());
         Ok(QueryIterator::new_prefix(
             &self.db,
@@ -580,7 +594,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing view column family"))?;
+            .ok_or_else(|| Error::MissingView)?;
         let iter = self.db.prefix_iterator_cf(cf, &prefix);
         Ok(QueryIterator::new_prefix(
             &self.db,
@@ -610,7 +624,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing view column family"))?;
+            .ok_or_else(|| Error::MissingView)?;
         let iter = self
             .db
             .iterator_cf(cf, IteratorMode::From(key_a.as_ref(), Direction::Forward));
@@ -640,7 +654,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing view column family"))?;
+            .ok_or_else(|| Error::MissingView)?;
         let iter = self
             .db
             .iterator_cf(cf, IteratorMode::From(key.as_ref(), Direction::Forward));
@@ -664,7 +678,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing view column family"))?;
+            .ok_or_else(|| Error::MissingView)?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start);
         Ok(QueryIterator::new_range(
             &self.db,
@@ -690,7 +704,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing view column family"))?;
+            .ok_or_else(|| Error::MissingView)?;
         let iter = self
             .db
             .iterator_cf(cf, IteratorMode::From(key.as_ref(), Direction::Reverse));
@@ -775,7 +789,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing view column family"))?;
+            .ok_or_else(|| Error::MissingView)?;
         let iter = self.db.iterator(IteratorMode::Start);
         for (key, value) in iter {
             let emitter = Emitter::new(&self.db, &key, cf, &self.key_sep);
@@ -874,7 +888,6 @@ impl QueryResult {
 /// of `QueryResult` for each matching index entry.
 ///
 /// ```no_run
-/// # use failure::Error;
 /// # use mokuroku::*;
 /// # use std::path::Path;
 /// # fn mapper(key: &[u8], value: &[u8], view: &str, emitter: &Emitter) -> Result<(), Error> {
@@ -1082,13 +1095,15 @@ mod tests {
 
     impl Document for LenVal {
         fn from_bytes(key: &[u8], value: &[u8]) -> Result<Self, Error> {
-            let mut serde_result: LenVal = serde_cbor::from_slice(value)?;
+            let mut serde_result: LenVal =
+                serde_cbor::from_slice(value).map_err(|err| Error::Serde(format!("{}", err)))?;
             serde_result.key = str::from_utf8(key)?.to_owned();
             Ok(serde_result)
         }
 
         fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-            let encoded: Vec<u8> = serde_cbor::to_vec(self)?;
+            let encoded: Vec<u8> =
+                serde_cbor::to_vec(self).map_err(|err| Error::Serde(format!("{}", err)))?;
             Ok(encoded)
         }
 
@@ -1203,13 +1218,15 @@ mod tests {
 
     impl Document for Asset {
         fn from_bytes(key: &[u8], value: &[u8]) -> Result<Self, Error> {
-            let mut serde_result: Asset = serde_cbor::from_slice(value)?;
+            let mut serde_result: Asset =
+                serde_cbor::from_slice(value).map_err(|err| Error::Serde(format!("{}", err)))?;
             serde_result.key = str::from_utf8(key)?.to_owned();
             Ok(serde_result)
         }
 
         fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-            let encoded: Vec<u8> = serde_cbor::to_vec(self)?;
+            let encoded: Vec<u8> =
+                serde_cbor::to_vec(self).map_err(|err| Error::Serde(format!("{}", err)))?;
             Ok(encoded)
         }
 
@@ -1568,7 +1585,7 @@ mod tests {
         mrview.push_str(view);
         let result = db
             .cf_handle(&mrview)
-            .ok_or_else(|| err_msg("missing column family"));
+            .ok_or_else(|| Error::MissingColumn(view.to_owned()));
         assert!(result.is_ok());
         let cf = result.unwrap();
         let iter = db.iterator_cf(cf, IteratorMode::Start);

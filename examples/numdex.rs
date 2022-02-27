@@ -2,7 +2,6 @@
 // Copyright (c) 2020 Nathan Fiedler
 //
 use chrono::prelude::*;
-use failure::Error;
 use mokuroku::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -21,13 +20,15 @@ struct Asset {
 // See the crate documentation for more information.
 impl Document for Asset {
     fn from_bytes(key: &[u8], value: &[u8]) -> Result<Self, Error> {
-        let mut serde_result: Asset = serde_cbor::from_slice(value)?;
+        let mut serde_result: Asset =
+            serde_cbor::from_slice(value).map_err(|err| Error::Serde(format!("{}", err)))?;
         serde_result.key = str::from_utf8(key)?.to_owned();
         Ok(serde_result)
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let encoded: Vec<u8> = serde_cbor::to_vec(self)?;
+        let encoded: Vec<u8> =
+            serde_cbor::to_vec(self).map_err(|err| Error::Serde(format!("{}", err)))?;
         Ok(encoded)
     }
 
