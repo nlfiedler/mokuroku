@@ -126,6 +126,16 @@ for result in results {
 }
 ```
 
+## Features
+
+### Optional features
+
+Mokuroku supports several optional features to reduce the burden of using this
+crate with other popular crates.
+
+* `anyhow`: Enable auto-conversion of `anyhow::Error` to `mokuroku::Error`
+* `serde_cbor`: Enable auto-conversion of `serde_cbor::Error` to `mokuroku::Error`
+
 ## Design
 
 ### Terminology

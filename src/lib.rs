@@ -73,22 +73,32 @@ use std::convert::TryInto;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+/// This type represents all possible errors that can occur within this crate.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    /// The 'changes' column family is missing from the database.
     #[error("missing changes column family")]
     MissingChanges,
-    #[error("missing column family {0}")]
-    MissingColumn(String),
+    /// The column family for the named view is missing from the database.
     #[error("missing view column family")]
-    MissingView,
+    MissingView(String),
+    /// An error occurred within the rocksdb crate.
     #[error("RocksDB database error")]
     RocksDB(#[from] rocksdb::Error),
+    /// Error related to serialization or deserialization.
     #[error("serialization error: {0}")]
     Serde(String),
+    /// Error occurred within the serde_cbor crate.
+    #[cfg(feature = "serde_cbor")]
+    #[error("serde_cbor error: {0}")]
+    CBOR(#[from] serde_cbor::Error),
+    /// Error in conversion of bytes to a UTF-8 encoded string.
     #[error("UTF-8 conversion error")]
     Utf8(#[from] std::str::Utf8Error),
-    #[error("unknown data store error")]
-    Unknown,
+    /// A catch-all error type from a commonly used crate.
+    #[cfg(feature = "anyhow")]
+    #[error("anyhow error: {0}")]
+    Anyhow(#[from] anyhow::Error),
 }
 
 pub mod base32;
@@ -495,7 +505,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| Error::MissingView)?;
+            .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start);
         Ok(QueryIterator::new(&self.db, iter, &self.key_sep, &cf))
     }
@@ -517,7 +527,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| Error::MissingView)?;
+            .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self.db.prefix_iterator_cf(cf, key.as_ref());
         Ok(QueryIterator::new_prefix(
             &self.db,
@@ -594,7 +604,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| Error::MissingView)?;
+            .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self.db.prefix_iterator_cf(cf, &prefix);
         Ok(QueryIterator::new_prefix(
             &self.db,
@@ -624,7 +634,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| Error::MissingView)?;
+            .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self
             .db
             .iterator_cf(cf, IteratorMode::From(key_a.as_ref(), Direction::Forward));
@@ -654,7 +664,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| Error::MissingView)?;
+            .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self
             .db
             .iterator_cf(cf, IteratorMode::From(key.as_ref(), Direction::Forward));
@@ -678,7 +688,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| Error::MissingView)?;
+            .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start);
         Ok(QueryIterator::new_range(
             &self.db,
@@ -704,7 +714,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| Error::MissingView)?;
+            .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self
             .db
             .iterator_cf(cf, IteratorMode::From(key.as_ref(), Direction::Reverse));
@@ -789,7 +799,7 @@ impl Database {
         let cf = self
             .db
             .cf_handle(&mrview)
-            .ok_or_else(|| Error::MissingView)?;
+            .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self.db.iterator(IteratorMode::Start);
         for (key, value) in iter {
             let emitter = Emitter::new(&self.db, &key, cf, &self.key_sep);
@@ -1585,7 +1595,7 @@ mod tests {
         mrview.push_str(view);
         let result = db
             .cf_handle(&mrview)
-            .ok_or_else(|| Error::MissingColumn(view.to_owned()));
+            .ok_or_else(|| Error::MissingView(view.to_owned()));
         assert!(result.is_ok());
         let cf = result.unwrap();
         let iter = db.iterator_cf(cf, IteratorMode::Start);

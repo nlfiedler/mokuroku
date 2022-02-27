@@ -7,7 +7,9 @@ This file follows the convention described at
 
 ## [3.0.0] - 2022-02-12
 ### BREAKING CHANGES
-- Remove `failure` dependency and introduce `Error` type instead.
+- Remove `failure` dependency and introduce new `Error` type.
+    * Implementations of `Document` must now return `mokuroku::Error`.
+    * Functions in `Database` now return `mokuroku::Error`.
 
 ## [2.7.0] - 2022-02-12
 ### Changed
