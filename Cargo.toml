@@ -14,13 +14,13 @@ exclude = [
 ]
 
 [dependencies]
-anyhow = { version = "1.0.55", optional = true }
-rocksdb = "0.18.0"
-thiserror = "1.0.30"
+anyhow = { version = "1.0.60", optional = true }
+rocksdb = "0.19.0"
+thiserror = "1.0.32"
 serde_cbor = { version = "0.11.2", optional = true }
 
 [dev-dependencies]
-chrono = { version = "0.4", features = ["serde"] }
-rand = "0.8.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_cbor = "0.11"
+chrono = { version = "0.4.20", features = ["serde"] }
+rand = "0.8.5"
+serde = { version = "1.0.142", features = ["derive"] }
+serde_cbor = "0.11.2"

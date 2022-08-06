@@ -63,7 +63,8 @@ $ cargo test
 ### Apple M1 Support
 
 With the 0.16 release of [rust-rocksdb](https://crates.io/crates/rocksdb) this
-library supports building using the ARM64 target on the macOS platform.
+library supports building using the ARM64 target on the macOS platform since
+release **2.5.0**.
 
 ## Examples
 

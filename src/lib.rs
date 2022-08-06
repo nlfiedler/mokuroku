@@ -801,7 +801,8 @@ impl Database {
             .cf_handle(&mrview)
             .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self.db.iterator(IteratorMode::Start);
-        for (key, value) in iter {
+        for item in iter {
+            let (key, value) = item?;
             let emitter = Emitter::new(&self.db, &key, cf, &self.key_sep);
             (*self.mapper)(&key, &value, view, &emitter)?;
         }
@@ -1037,7 +1038,7 @@ impl<'a> Iterator for QueryIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         // loop until we find a non-stale entry, or run out entirely
-        while let Some((key, value)) = self.dbiter.next() {
+        while let Some(Ok((key, value))) = self.dbiter.next() {
             if let Some(prefix) = &self.prefix {
                 // enforce the primary key matching the given prefix
                 if key.len() < prefix.len() {
