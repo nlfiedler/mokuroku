@@ -66,42 +66,42 @@ fn main() {
         Asset {
             key: String::from("asset/july8"),
             location: String::from("hawaii"),
-            updated: Utc.ymd(2014, 7, 8).and_hms(9, 10, 11),
+            updated: Utc.with_ymd_and_hms(2014, 7, 8, 9, 10, 11).unwrap(),
         },
         Asset {
             key: String::from("asset/june9"),
             location: String::from("taiwan"),
-            updated: Utc.ymd(2014, 6, 9).and_hms(9, 10, 11),
+            updated: Utc.with_ymd_and_hms(2014, 6, 9, 9, 10, 11).unwrap(),
         },
         Asset {
             key: String::from("asset/october14"),
             location: String::from("hakone"),
-            updated: Utc.ymd(2014, 10, 14).and_hms(9, 10, 11),
+            updated: Utc.with_ymd_and_hms(2014, 10, 14, 9, 10, 11).unwrap(),
         },
         Asset {
             key: String::from("asset/august25"),
             location: String::from("hakone"),
-            updated: Utc.ymd(2014, 8, 25).and_hms(9, 10, 11),
+            updated: Utc.with_ymd_and_hms(2014, 8, 25, 9, 10, 11).unwrap(),
         },
         Asset {
             key: String::from("asset/may13"),
             location: String::from("dublin"),
-            updated: Utc.ymd(2014, 5, 13).and_hms(9, 10, 11),
+            updated: Utc.with_ymd_and_hms(2014, 5, 13, 9, 10, 11).unwrap(),
         },
         Asset {
             key: String::from("asset/september9"),
             location: String::from("dublin"),
-            updated: Utc.ymd(2014, 9, 9).and_hms(9, 10, 11),
+            updated: Utc.with_ymd_and_hms(2014, 9, 9, 9, 10, 11).unwrap(),
         },
         Asset {
             key: String::from("asset/january31"),
             location: String::from("oakland"),
-            updated: Utc.ymd(2014, 1, 31).and_hms(9, 10, 11),
+            updated: Utc.with_ymd_and_hms(2014, 1, 31, 9, 10, 11).unwrap(),
         },
         Asset {
             key: String::from("asset/april11"),
             location: String::from("oakland"),
-            updated: Utc.ymd(2014, 4, 11).and_hms(9, 10, 11),
+            updated: Utc.with_ymd_and_hms(2014, 4, 11, 9, 10, 11).unwrap(),
         },
     ];
     for document in documents.iter() {
@@ -111,10 +111,16 @@ fn main() {
     }
 
     // query for assets within a given range of time
-    let millis = Utc.ymd(2014, 6, 21).and_hms(0, 0, 0).timestamp_millis();
+    let millis = Utc
+        .with_ymd_and_hms(2014, 6, 21, 0, 0, 0)
+        .unwrap()
+        .timestamp_millis();
     let bytes = millis.to_be_bytes().to_vec();
     let key_a = base32::encode(&bytes);
-    let millis = Utc.ymd(2014, 9, 21).and_hms(0, 0, 0).timestamp_millis();
+    let millis = Utc
+        .with_ymd_and_hms(2014, 9, 21, 0, 0, 0)
+        .unwrap()
+        .timestamp_millis();
     let bytes = millis.to_be_bytes().to_vec();
     let key_b = base32::encode(&bytes);
     println!("querying for assets updated during summer...");
