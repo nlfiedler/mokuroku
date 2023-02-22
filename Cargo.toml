@@ -1,6 +1,6 @@
 [package]
 name = "mokuroku"
-version = "3.1.0"
+version = "3.2.0"
 authors = ["Nathan Fiedler <nathanfiedler@fastmail.fm>"]
 edition = "2018"
 description = "Secondary indices like PouchDB for RocksDB in Rust."
@@ -15,7 +15,7 @@ exclude = [
 
 [dependencies]
 anyhow = { version = "1.0.60", optional = true }
-rocksdb = "0.19.0"
+rocksdb = "0.20.1"
 thiserror = "1.0.32"
 serde_cbor = { version = "0.11.2", optional = true }
 
