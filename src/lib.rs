@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019-2022 Nathan Fiedler
+// Copyright (c) 2023 Nathan Fiedler
 //
 
 //! ## Overview
@@ -276,7 +276,7 @@ impl<'a> Emitter<'a> {
         // key separator and the primary data record key
         let len = key.as_ref().len() + self.sep.len() + self.key.len();
         let mut uniq_key: Vec<u8> = Vec::with_capacity(len);
-        uniq_key.extend_from_slice(&key.as_ref()[..]);
+        uniq_key.extend_from_slice(key.as_ref());
         uniq_key.extend_from_slice(self.sep);
         uniq_key.extend_from_slice(self.key);
         // prefix the index value, if any, with the sequence number
@@ -437,11 +437,11 @@ impl Database {
         // process every index on update
         for view in &self.views {
             let mut mrview = String::from(VIEW_PREFIX);
-            mrview.push_str(&view);
+            mrview.push_str(view);
             // only update the index if the column family exists
             if let Some(cf) = self.db.cf_handle(&mrview) {
-                let emitter = Emitter::new(&self.db, key.as_ref(), &cf, &self.key_sep);
-                D::map(&value, &view, &emitter)?;
+                let emitter = Emitter::new(&self.db, key.as_ref(), cf, &self.key_sep);
+                D::map(value, view, &emitter)?;
             }
         }
         Ok(())
@@ -483,14 +483,12 @@ impl Database {
             None => {
                 let opts = Options::default();
                 self.db.create_cf(CHANGES_CF, &opts)?;
-                self.db
-                    .cf_handle(CHANGES_CF)
-                    .ok_or_else(|| Error::MissingChanges)?
+                self.db.cf_handle(CHANGES_CF).ok_or(Error::MissingChanges)?
             }
             Some(cf) => cf,
         };
         let seq = self.db.latest_sequence_number();
-        self.db.put_cf(cf, key.as_ref(), &seq.to_le_bytes())?;
+        self.db.put_cf(cf, key.as_ref(), seq.to_le_bytes())?;
         Ok(())
     }
 
@@ -507,7 +505,7 @@ impl Database {
             .cf_handle(&mrview)
             .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start);
-        Ok(QueryIterator::new(&self.db, iter, &self.key_sep, &cf))
+        Ok(QueryIterator::new(&self.db, iter, &self.key_sep, cf))
     }
 
     ///
@@ -599,7 +597,7 @@ impl Database {
         let mrview = self.ensure_view_built(view)?;
         let len = key.as_ref().len() + self.key_sep.len();
         let mut prefix: Vec<u8> = Vec::with_capacity(len);
-        prefix.extend_from_slice(&key.as_ref()[..]);
+        prefix.extend_from_slice(key.as_ref());
         prefix.extend_from_slice(&self.key_sep);
         let cf = self
             .db
@@ -795,10 +793,10 @@ impl Database {
     ///
     fn build(&mut self, view: &str, mrview: &str) -> Result<(), Error> {
         let opts = Options::default();
-        self.db.create_cf(&mrview, &opts)?;
+        self.db.create_cf(mrview, &opts)?;
         let cf = self
             .db
-            .cf_handle(&mrview)
+            .cf_handle(mrview)
             .ok_or_else(|| Error::MissingView(view.to_owned()))?;
         let iter = self.db.iterator(IteratorMode::Start);
         for item in iter {
