@@ -5,6 +5,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+### Added
+- Feature flag `multi-threaded-cf` that is passed to `rocksdb` to allow column
+  families to be created and dropped from multiple threads concurrently.
+
 ## [3.3.0] - 2023-05-10
 ### Changed
 - Upgrade to `rust-rocksdb` 0.21.0 release.

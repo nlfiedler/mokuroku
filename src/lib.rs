@@ -66,6 +66,14 @@
 //! the `base32` module provided in this crate. Doing so will allow for range
 //! queries on the numeric key, but keep in mind that the query keys must also
 //! be in Big-endian order and base32hex encoded.
+//!
+//! ## Features
+//!
+//! ### Performance features
+//!
+//! * **multi-threaded-cf** - Passes the same feature flag (`multi-threaded-cf`)
+//!   to the `rocksdb` crate, to allow column families to be created and dropped
+//!   from multiple threads concurrently.
 
 use rocksdb::{ColumnFamily, DBIterator, Direction, IteratorMode, Options, DB};
 use std::collections::HashMap;
