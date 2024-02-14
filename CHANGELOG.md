@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [3.5.0] - 2024-02-13
+### Changed
+- Upgrade to `rust-rocksdb` 0.22.0 release.
+
 ## [3.4.0] - 2023-09-17
 ### Added
 - Feature flag `multi-threaded-cf` that is passed to `rocksdb` to allow column
