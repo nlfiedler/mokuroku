@@ -28,6 +28,7 @@ While the author has read a couple of relevant research papers, he is not by any
 ### Prerequisites
 
 * [Rust](https://www.rust-lang.org) stable (2018 edition)
+* [Clang](https://clang.llvm.org/)
 
 ### Building and Testing
 
@@ -42,6 +43,14 @@ $ cargo test
 ### Apple M1 Support
 
 With the 0.16 release of [rust-rocksdb](https://crates.io/crates/rocksdb) this library supports building using the ARM64 target on the macOS platform since release **2.5.0**.
+
+### macOS Setup
+
+Installing XCode and the command line tools should be sufficient.
+
+### Windows Setup
+
+Installing Clang is easy with the command `winget install LLVM`, after which you need to add the path to the LLVM `bin` directory to your `PATH` environment variable (by default that will be in `C:\Program Files\LLVM\bin`).
 
 ## Examples
 
