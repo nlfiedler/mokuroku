@@ -5,6 +5,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [3.6.0] - 2024-12-26
+### Changed
+- Upgrade to `rust-rocksdb` 0.23.0 release.
+- Upgrade to `thiserror` 2.0 release.
+
 ## [3.5.0] - 2024-02-13
 ### Changed
 - Upgrade to `rust-rocksdb` 0.22.0 release.
