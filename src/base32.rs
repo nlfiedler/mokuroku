@@ -177,7 +177,7 @@ mod test {
         // Generate some random data, encode it, sort the list, then visit
         // pairs, decode, and ensure values are in sorted order (i.e. the
         // encoded sort and raw data should sort the same).
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut collection: Vec<Vec<u8>> = Vec::new();
         for _ in 0..100 {
             let mut data = [0u8; 8];
