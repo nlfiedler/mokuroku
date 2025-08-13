@@ -27,7 +27,7 @@ While the author has read a couple of relevant research papers, he is not by any
 
 ### Prerequisites
 
-* [Rust](https://www.rust-lang.org) stable (2018 edition)
+* [Rust](https://www.rust-lang.org) stable (2024 edition)
 * [Clang](https://clang.llvm.org/)
 
 ### Building and Testing

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2023 Nathan Fiedler
+// Copyright (c) 2019 Nathan Fiedler
 //
 
 //! ## Overview
@@ -75,7 +75,7 @@
 //!   to the `rocksdb` crate, to allow column families to be created and dropped
 //!   from multiple threads concurrently.
 
-use rocksdb::{ColumnFamily, DBIterator, Direction, IteratorMode, Options, DB};
+use rocksdb::{ColumnFamily, DB, DBIterator, Direction, IteratorMode, Options};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt;
@@ -506,7 +506,7 @@ impl Database {
     /// If the index has not yet been built, it will be built prior to returning
     /// any results.
     ///
-    pub fn query(&mut self, view: &str) -> Result<QueryIterator, Error> {
+    pub fn query(&mut self, view: &str) -> Result<QueryIterator<'_>, Error> {
         let mrview = self.ensure_view_built(view)?;
         let cf = self
             .db
@@ -528,7 +528,7 @@ impl Database {
         &mut self,
         view: &str,
         key: K,
-    ) -> Result<QueryIterator, Error> {
+    ) -> Result<QueryIterator<'_>, Error> {
         let mrview = self.ensure_view_built(view)?;
         let cf = self
             .db
@@ -601,7 +601,7 @@ impl Database {
         &mut self,
         view: &str,
         key: K,
-    ) -> Result<QueryIterator, Error> {
+    ) -> Result<QueryIterator<'_>, Error> {
         let mrview = self.ensure_view_built(view)?;
         let len = key.as_ref().len() + self.key_sep.len();
         let mut prefix: Vec<u8> = Vec::with_capacity(len);
@@ -635,7 +635,7 @@ impl Database {
         view: &str,
         key_a: K,
         key_b: K,
-    ) -> Result<QueryIterator, Error> {
+    ) -> Result<QueryIterator<'_>, Error> {
         let mrview = self.ensure_view_built(view)?;
         let cf = self
             .db
@@ -665,7 +665,7 @@ impl Database {
         &mut self,
         view: &str,
         key: K,
-    ) -> Result<QueryIterator, Error> {
+    ) -> Result<QueryIterator<'_>, Error> {
         let mrview = self.ensure_view_built(view)?;
         let cf = self
             .db
@@ -689,7 +689,7 @@ impl Database {
         &mut self,
         view: &str,
         key: K,
-    ) -> Result<QueryIterator, Error> {
+    ) -> Result<QueryIterator<'_>, Error> {
         let mrview = self.ensure_view_built(view)?;
         let cf = self
             .db
@@ -715,7 +715,7 @@ impl Database {
         &mut self,
         view: &str,
         key: K,
-    ) -> Result<QueryIterator, Error> {
+    ) -> Result<QueryIterator<'_>, Error> {
         let mrview = self.ensure_view_built(view)?;
         let cf = self
             .db
