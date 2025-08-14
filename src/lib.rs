@@ -1028,12 +1028,12 @@ impl<'a> QueryIterator<'a> {
         // record is going to be low. Even just a simple Mutex<Option> of the
         // most recent stale primary key might be a waste of effort.
         //
-        if let Some(cf) = self.db.cf_handle(CHANGES_CF) {
-            if let Ok(Some(val)) = self.db.get_cf(cf, key) {
-                let index_seq = read_le_u64(seq);
-                let changed_seq = read_le_u64(&val);
-                return index_seq < changed_seq;
-            }
+        if let Some(cf) = self.db.cf_handle(CHANGES_CF)
+            && let Ok(Some(val)) = self.db.get_cf(cf, key)
+        {
+            let index_seq = read_le_u64(seq);
+            let changed_seq = read_le_u64(&val);
+            return index_seq < changed_seq;
         }
         false
     }
@@ -1149,7 +1149,7 @@ mod tests {
             // scope the database so we can drop it
             let mut dbase =
                 Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
-            let result = dbase.put(&key, &document);
+            let result = dbase.put(key, &document);
             assert!(result.is_ok());
 
             let result = dbase.query("value");
@@ -1167,7 +1167,7 @@ mod tests {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         let mut dbase = Database::open(Path::new(db_path), &views, Box::new(mapper), opts).unwrap();
-        let result: Result<Option<LenVal>, Error> = dbase.get(&key);
+        let result: Result<Option<LenVal>, Error> = dbase.get(key);
         assert!(result.is_ok());
         let option = result.unwrap();
         assert!(option.is_some());
@@ -1175,14 +1175,14 @@ mod tests {
         assert_eq!(document.key, actual.key);
         assert_eq!(document.len, actual.len);
         assert_eq!(document.val, actual.val);
-        let result = dbase.delete(&key);
+        let result = dbase.delete(key);
         assert!(result.is_ok());
-        let result: Result<Option<LenVal>, Error> = dbase.get(&key);
+        let result: Result<Option<LenVal>, Error> = dbase.get(key);
         assert!(result.is_ok());
         let option = result.unwrap();
         assert!(option.is_none());
         // repeated delete is ok and not an error
-        let result = dbase.delete(&key);
+        let result = dbase.delete(key);
         assert!(result.is_ok());
     }
 
@@ -1250,7 +1250,7 @@ mod tests {
         fn map(&self, view: &str, emitter: &Emitter) -> Result<(), Error> {
             if view == "tags" {
                 for tag in &self.tags {
-                    emitter.emit(tag.as_bytes(), Some(&self.location.as_bytes()))?;
+                    emitter.emit(tag.as_bytes(), Some(self.location.as_bytes()))?;
                 }
             } else if view == "location" {
                 emitter.emit(self.location.as_bytes(), None)?;
@@ -1287,7 +1287,7 @@ mod tests {
             ],
         };
         let key = document.key.as_bytes();
-        let result = dbase.put(&key, &document);
+        let result = dbase.put(key, &document);
         assert!(result.is_ok());
         let result = dbase.query("tags");
         assert!(result.is_ok());
@@ -1325,7 +1325,7 @@ mod tests {
             ],
         };
         let key = document.key.as_bytes();
-        let result = dbase.put(&key, &document);
+        let result = dbase.put(key, &document);
         assert!(result.is_ok());
         assert_eq!(count_index(&mut dbase, "tags"), 0);
     }
@@ -1348,7 +1348,7 @@ mod tests {
             ],
         };
         let key = document.key.as_bytes();
-        let result = dbase.put(&key, &document);
+        let result = dbase.put(key, &document);
         assert!(result.is_ok());
         assert_eq!(count_index(&mut dbase, ""), 0);
     }
@@ -1371,7 +1371,7 @@ mod tests {
             ],
         };
         let key = document.key.as_bytes();
-        let result = dbase.put(&key, &document);
+        let result = dbase.put(key, &document);
         assert!(result.is_ok());
     }
 
@@ -1460,7 +1460,7 @@ mod tests {
         ];
         for document in documents.iter() {
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, document);
+            let result = dbase.put(key, document);
             assert!(result.is_ok());
         }
 
@@ -1551,7 +1551,7 @@ mod tests {
         ];
         for document in documents.iter() {
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, document);
+            let result = dbase.put(key, document);
             assert!(result.is_ok());
         }
 
@@ -1656,7 +1656,7 @@ mod tests {
         ];
         for document in documents.iter() {
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, document);
+            let result = dbase.put(key, document);
             assert!(result.is_ok());
         }
 
@@ -1688,7 +1688,7 @@ mod tests {
         ];
         for document in documents.iter() {
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, document);
+            let result = dbase.put(key, document);
             assert!(result.is_ok());
         }
 
@@ -1738,7 +1738,7 @@ mod tests {
         ];
         for document in documents.iter() {
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, document);
+            let result = dbase.put(key, document);
             assert!(result.is_ok());
         }
 
@@ -1783,7 +1783,7 @@ mod tests {
                 val: String::from(*fruit_name),
             };
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, &document);
+            let result = dbase.put(key, &document);
             assert!(result.is_ok());
         }
 
@@ -1874,7 +1874,7 @@ mod tests {
                 val: String::from(*fruit_name),
             };
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, &document);
+            let result = dbase.put(key, &document);
             assert!(result.is_ok());
         }
 
@@ -1925,7 +1925,7 @@ mod tests {
                 val: String::from(*fruit_name),
             };
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, &document);
+            let result = dbase.put(key, &document);
             assert!(result.is_ok());
         }
 
@@ -1964,7 +1964,7 @@ mod tests {
                 val: str::from_utf8(&encoded[..]).unwrap().to_owned(),
             };
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, &document);
+            let result = dbase.put(key, &document);
             assert!(result.is_ok());
         }
 
@@ -2039,7 +2039,7 @@ mod tests {
         ];
         for document in documents.iter() {
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, document);
+            let result = dbase.put(key, document);
             assert!(result.is_ok());
         }
 
@@ -2112,7 +2112,7 @@ mod tests {
             ];
             for document in documents.iter() {
                 let key = document.key.as_bytes();
-                let result = dbase.put(&key, document);
+                let result = dbase.put(key, document);
                 assert!(result.is_ok());
             }
 
@@ -2204,7 +2204,7 @@ mod tests {
         ];
         for document in documents.iter() {
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, document);
+            let result = dbase.put(key, document);
             assert!(result.is_ok());
         }
 
@@ -2279,7 +2279,7 @@ mod tests {
         ];
         for document in documents.iter() {
             let key = document.key.as_bytes();
-            let result = dbase.put(&key, document);
+            let result = dbase.put(key, document);
             assert!(result.is_ok());
         }
 

@@ -106,7 +106,7 @@ fn main() {
     ];
     for document in documents.iter() {
         let key = document.key.as_bytes();
-        let result = dbase.put(&key, document);
+        let result = dbase.put(key, document);
         assert!(result.is_ok());
     }
 

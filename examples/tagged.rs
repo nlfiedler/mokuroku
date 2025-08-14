@@ -36,7 +36,7 @@ impl Document for Asset {
         // well respond to more than just one view name.
         if view == "tags" {
             for tag in &self.tags {
-                emitter.emit(tag.as_bytes(), Some(&self.location.as_bytes()))?;
+                emitter.emit(tag.as_bytes(), Some(self.location.as_bytes()))?;
             }
         }
         Ok(())
@@ -109,7 +109,7 @@ fn main() {
     ];
     for document in documents.iter() {
         let key = document.key.as_bytes();
-        let result = dbase.put(&key, document);
+        let result = dbase.put(key, document);
         assert!(result.is_ok());
     }
 
