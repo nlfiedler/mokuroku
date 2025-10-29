@@ -1,6 +1,6 @@
 [package]
 name = "mokuroku"
-version = "3.7.0"
+version = "3.8.0"
 authors = ["Nathan Fiedler <nathanfiedler@fastmail.fm>"]
 edition = "2024"
 description = "Secondary indices like PouchDB for RocksDB in Rust."
@@ -8,13 +8,11 @@ repository = "https://github.com/nlfiedler/mokuroku"
 readme = "README.md"
 keywords = ["database", "index", "rocksdb", "search"]
 license = "Apache-2.0"
-exclude = [
-    "TODO.org",
-    "test/*",
-]
+exclude = ["TODO.org", "test/*"]
 
 [dependencies]
 anyhow = { version = "1.0.60", optional = true }
+hashed-array-tree = { version = "1.1", optional = true }
 rocksdb = "0.24.0"
 thiserror = "2.0.9"
 serde_cbor = { version = "0.11.2", optional = true }
@@ -26,4 +24,5 @@ serde = { version = "1.0.142", features = ["derive"] }
 serde_cbor = "0.11.2"
 
 [features]
+hat = ["dep:hashed-array-tree"]
 multi-threaded-cf = ["rocksdb/multi-threaded-cf"]

@@ -5,6 +5,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [3.8.0] - 2025-10-28
+### Changed
+- Add feature `hat` and `query_all_keys_hat()` that returns a Hashed Array Tree
+  rather than a `Vec` since the memory overhead is greatly reduced.
+
 ## [3.7.0] - 2024-12-26
 ### Changed
 - Upgrade to `rust-rocksdb` 0.24.0 release.

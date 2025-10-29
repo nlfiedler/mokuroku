@@ -71,10 +71,14 @@
 //!
 //! ### Performance features
 //!
+//! * **anyhow** - Allows `Document` to return `Error` derived from anyhow error.
 //! * **multi-threaded-cf** - Passes the same feature flag (`multi-threaded-cf`)
 //!   to the `rocksdb` crate, to allow column families to be created and dropped
 //!   from multiple threads concurrently.
+//! * **serde_cbor** - Allows `Document` to return `Error` derived from CBOR error.
 
+#[cfg(feature = "hat")]
+use hashed_array_tree::HashedArrayTree;
 use rocksdb::{ColumnFamily, DB, DBIterator, Direction, IteratorMode, Options};
 use std::collections::HashMap;
 use std::convert::TryInto;
@@ -553,7 +557,7 @@ impl Database {
     /// This function is potentially memory intensive as it will query the index
     /// for each given key, combining all of the results in memory, and then
     /// filtering out the documents that lack all of the keys. As such this
-    /// returns a vector versus an iterator.
+    /// returns a collection versus an iterator.
     ///
     pub fn query_all_keys<I, N>(&mut self, view: &str, keys: I) -> Result<Vec<QueryResult>, Error>
     where
@@ -563,7 +567,6 @@ impl Database {
         // query each of the keys and collect the results into one list
         let mut query_results: Vec<QueryResult> = Vec::new();
         let mut key_count: usize = 0;
-        #[allow(clippy::explicit_counter_loop)]
         for key in keys.into_iter() {
             for item in self.query_by_key(view, N::as_ref(&key))? {
                 query_results.push(item);
@@ -580,7 +583,60 @@ impl Database {
             }
         });
         let mut matching_rows: Vec<QueryResult> = query_results
-            .drain(..)
+            .into_iter()
+            .filter(|r| key_counts[r.doc_id.as_ref()] == key_count)
+            .collect();
+        // remove duplicate documents by sorting on the primary key
+        matching_rows.sort_unstable_by(|a, b| a.doc_id.as_ref().cmp(b.doc_id.as_ref()));
+        matching_rows.dedup_by(|a, b| a.doc_id.as_ref() == b.doc_id.as_ref());
+        Ok(matching_rows)
+    }
+
+    ///
+    /// Query the index for documents that have all of the given keys.
+    ///
+    /// Differs from [`query_all_keys`] in that it returns a `HashedArrayTree`
+    /// rather than a `Vec`. The memory overhead of HAT is on the order of O(√N)
+    /// while that of a standard vector is O(N).
+    ///
+    /// Unlike the other query functions, this one returns a single result per
+    /// document for which it emitted all of the specified keys.
+    ///
+    /// This function is potentially memory intensive as it will query the index
+    /// for each given key, combining all of the results in memory, and then
+    /// filtering out the documents that lack all of the keys. As such this
+    /// returns a collection versus an iterator.
+    ///
+    #[cfg(feature = "hat")]
+    pub fn query_all_keys_hat<I, N>(
+        &mut self,
+        view: &str,
+        keys: I,
+    ) -> Result<HashedArrayTree<QueryResult>, Error>
+    where
+        I: IntoIterator<Item = N>,
+        N: AsRef<[u8]>,
+    {
+        // query each of the keys and collect the results into one list
+        let mut query_results = HashedArrayTree::<QueryResult>::new();
+        let mut key_count: usize = 0;
+        for key in keys.into_iter() {
+            for item in self.query_by_key(view, N::as_ref(&key))? {
+                query_results.push(item);
+            }
+            key_count += 1;
+        }
+        // reduce the documents to those that have all of the given keys
+        let mut key_counts: HashMap<Box<[u8]>, usize> = HashMap::new();
+        query_results.iter().for_each(|r| {
+            if let Some(value) = key_counts.get_mut(r.doc_id.as_ref()) {
+                *value += 1;
+            } else {
+                key_counts.insert(r.doc_id.clone(), 1);
+            }
+        });
+        let mut matching_rows: HashedArrayTree<QueryResult> = query_results
+            .into_iter()
             .filter(|r| key_counts[r.doc_id.as_ref()] == key_count)
             .collect();
         // remove duplicate documents by sorting on the primary key
@@ -2212,7 +2268,83 @@ mod tests {
         let keys: Vec<&[u8]> = vec![b"cat", b"white"];
         let result = dbase.query_all_keys("tags", &keys);
         assert!(result.is_ok());
-        let results: Vec<QueryResult> = result.unwrap().drain(..).collect();
+        let results = result.unwrap();
+        assert_eq!(results.len(), 2);
+        let keys: Vec<String> = results
+            .iter()
+            .map(|r| str::from_utf8(&r.doc_id).unwrap().to_owned())
+            .collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&String::from("as/whitecatears")));
+        assert!(keys.contains(&String::from("as/whitecattail")));
+    }
+
+    #[test]
+    #[cfg(feature = "hat")]
+    fn query_all_keys_hat() {
+        let db_path = "tmp/test/query_all_keys_hat";
+        let _ = fs::remove_dir_all(db_path);
+        let views = vec!["tags".to_owned()];
+        let mut dbase =
+            Database::open_default(Path::new(db_path), &views, Box::new(mapper)).unwrap();
+        let documents = [
+            Asset {
+                key: String::from("as/blackcat"),
+                location: String::from("hawaii"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("black"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/blackdog"),
+                location: String::from("taiwan"),
+                tags: vec![
+                    String::from("dog"),
+                    String::from("black"),
+                    String::from("fur"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitecatears"),
+                location: String::from("hakone"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("ears"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitecattail"),
+                location: String::from("hakone"),
+                tags: vec![
+                    String::from("cat"),
+                    String::from("white"),
+                    String::from("tail"),
+                ],
+            },
+            Asset {
+                key: String::from("as/whitemouse"),
+                location: String::from("dublin"),
+                tags: vec![
+                    String::from("mouse"),
+                    String::from("white"),
+                    String::from("tail"),
+                ],
+            },
+        ];
+        for document in documents.iter() {
+            let key = document.key.as_bytes();
+            let result = dbase.put(key, document);
+            assert!(result.is_ok());
+        }
+
+        // querying by all tags: cat, white
+        let keys: Vec<&[u8]> = vec![b"cat", b"white"];
+        let result = dbase.query_all_keys_hat("tags", &keys);
+        assert!(result.is_ok());
+        let results = result.unwrap();
         assert_eq!(results.len(), 2);
         let keys: Vec<String> = results
             .iter()
