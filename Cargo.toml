@@ -25,7 +25,6 @@ serde_cbor = "0.11.2"
 
 [features]
 hat = ["dep:hashed-array-tree"]
-multi-threaded-cf = ["rocksdb/multi-threaded-cf"]
 
 [package.metadata.docs.rs]
 all-features = true

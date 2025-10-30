@@ -108,12 +108,8 @@ for result in results {
 Mokuroku supports several optional features to reduce the burden of using this crate with other popular crates.
 
 * `anyhow`: Enable auto-conversion of `anyhow::Error` to `mokuroku::Error`
+* `hat`: Enable `get_all_keys_hat()` which returns a `HashedArrayTree` in place of a `Vec`.
 * `serde_cbor`: Enable auto-conversion of `serde_cbor::Error` to `mokuroku::Error`
-
-### Performance features
-
-* `multi-threaded-cf`: Passed to `rocksdb` to allow column families to be
-  created and dropped from multiple threads concurrently.
 
 ## Design
 

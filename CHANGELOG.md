@@ -5,6 +5,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## Unreleased
+### Changed
+- Remove feature flag `multi-threaded-cf` which never worked (it failed to
+  compile). If you want this feature, you will need to make the necessary
+  changes and submit a pull request.
+
 ## [3.8.1] - 2025-10-29
 ### Changed
 - Fix the API documentation with respect to the supported feature flags.

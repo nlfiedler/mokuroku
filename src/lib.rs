@@ -72,9 +72,6 @@
 //! * `anyhow`: Allows `Document` to return `Error` derived from anyhow error.
 //! * `hat`: Enable functions that return a `HashedArrayTree` rather than a
 //!   `Vec` in order to reduce the memory overhead of the resulting collection.
-//! * `multi-threaded-cf`: Passes the same feature flag (`multi-threaded-cf`) to
-//!   the `rocksdb` crate, to allow column families to be created and dropped
-//!   from multiple threads concurrently.
 //! * `serde_cbor`: Allows `Document` to return `Error` derived from CBOR error.
 
 #[cfg(any(doc, feature = "hat"))]
