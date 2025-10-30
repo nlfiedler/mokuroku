@@ -67,17 +67,17 @@
 //! queries on the numeric key, but keep in mind that the query keys must also
 //! be in Big-endian order and base32hex encoded.
 //!
-//! ## Features
+//! ## Feature flags
 //!
-//! ### Performance features
-//!
-//! * **anyhow** - Allows `Document` to return `Error` derived from anyhow error.
-//! * **multi-threaded-cf** - Passes the same feature flag (`multi-threaded-cf`)
-//!   to the `rocksdb` crate, to allow column families to be created and dropped
+//! * `anyhow`: Allows `Document` to return `Error` derived from anyhow error.
+//! * `hat`: Enable functions that return a `HashedArrayTree` rather than a
+//!   `Vec` in order to reduce the memory overhead of the resulting collection.
+//! * `multi-threaded-cf`: Passes the same feature flag (`multi-threaded-cf`) to
+//!   the `rocksdb` crate, to allow column families to be created and dropped
 //!   from multiple threads concurrently.
-//! * **serde_cbor** - Allows `Document` to return `Error` derived from CBOR error.
+//! * `serde_cbor`: Allows `Document` to return `Error` derived from CBOR error.
 
-#[cfg(feature = "hat")]
+#[cfg(any(doc, feature = "hat"))]
 use hashed_array_tree::HashedArrayTree;
 use rocksdb::{ColumnFamily, DB, DBIterator, Direction, IteratorMode, Options};
 use std::collections::HashMap;
@@ -102,6 +102,7 @@ pub enum Error {
     Serde(String),
     /// Error occurred within the serde_cbor crate.
     #[cfg(feature = "serde_cbor")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "serde_cbor")))]
     #[error("serde_cbor error: {0}")]
     CBOR(#[from] serde_cbor::Error),
     /// Error in conversion of bytes to a UTF-8 encoded string.
@@ -109,6 +110,7 @@ pub enum Error {
     Utf8(#[from] std::str::Utf8Error),
     /// A catch-all error type from a commonly used crate.
     #[cfg(feature = "anyhow")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "anyhow")))]
     #[error("anyhow error: {0}")]
     Anyhow(#[from] anyhow::Error),
 }
@@ -595,9 +597,9 @@ impl Database {
     ///
     /// Query the index for documents that have all of the given keys.
     ///
-    /// Differs from [`query_all_keys`] in that it returns a `HashedArrayTree`
-    /// rather than a `Vec`. The memory overhead of HAT is on the order of O(√N)
-    /// while that of a standard vector is O(N).
+    /// Differs from [`query_all_keys()`](Self::query_all_keys()) in that it
+    /// returns a `HashedArrayTree` rather than a `Vec`. The memory overhead of
+    /// HAT is on the order of O(√N) while that of a standard vector is O(N).
     ///
     /// Unlike the other query functions, this one returns a single result per
     /// document for which it emitted all of the specified keys.
@@ -608,6 +610,7 @@ impl Database {
     /// returns a collection versus an iterator.
     ///
     #[cfg(feature = "hat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "hat")))]
     pub fn query_all_keys_hat<I, N>(
         &mut self,
         view: &str,

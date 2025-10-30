@@ -1,6 +1,6 @@
 [package]
 name = "mokuroku"
-version = "3.8.0"
+version = "3.8.1"
 authors = ["Nathan Fiedler <nathanfiedler@fastmail.fm>"]
 edition = "2024"
 description = "Secondary indices like PouchDB for RocksDB in Rust."
@@ -26,3 +26,6 @@ serde_cbor = "0.11.2"
 [features]
 hat = ["dep:hashed-array-tree"]
 multi-threaded-cf = ["rocksdb/multi-threaded-cf"]
+
+[package.metadata.docs.rs]
+all-features = true
