@@ -1,6 +1,6 @@
 [package]
 name = "mokuroku"
-version = "3.8.1"
+version = "3.8.2"
 authors = ["Nathan Fiedler <nathanfiedler@fastmail.fm>"]
 edition = "2024"
 description = "Secondary indices like PouchDB for RocksDB in Rust."
@@ -12,7 +12,7 @@ exclude = ["TODO.org", "test/*"]
 
 [dependencies]
 anyhow = { version = "1.0.60", optional = true }
-hashed-array-tree = { version = "1.1", optional = true }
+hashed-array-tree = { version = "1.2.0", optional = true }
 rocksdb = "0.24.0"
 thiserror = "2.0.9"
 serde_cbor = { version = "0.11.2", optional = true }

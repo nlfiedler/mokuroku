@@ -37,7 +37,7 @@ These commands will build the library and run the tests.
 ```shell
 $ cargo clean
 $ cargo build
-$ cargo test
+$ cargo test --all-features
 ```
 
 ### Apple M1 Support
