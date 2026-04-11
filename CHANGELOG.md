@@ -5,6 +5,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [3.8.3] - 2026-04-11
+### Changed
+- All query functions will no longer panic if the view has not been built but
+  will instead return an error.
+- Bumped `hashed-array-tree` dependency to 1.3.0 release.
+
 ## [3.8.2] - 2025-11-05
 ### Changed
 - Upgrade `hashed-array-tree` to 1.2.0 release.

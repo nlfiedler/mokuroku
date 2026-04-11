@@ -574,13 +574,13 @@ impl Database {
         }
         // reduce the documents to those that have all of the given keys
         let mut key_counts: HashMap<Box<[u8]>, usize> = HashMap::new();
-        query_results.iter().for_each(|r| {
+        for r in &query_results {
             if let Some(value) = key_counts.get_mut(r.doc_id.as_ref()) {
                 *value += 1;
             } else {
                 key_counts.insert(r.doc_id.clone(), 1);
             }
-        });
+        }
         let mut matching_rows: Vec<QueryResult> = query_results
             .into_iter()
             .filter(|r| key_counts[r.doc_id.as_ref()] == key_count)
@@ -628,13 +628,13 @@ impl Database {
         }
         // reduce the documents to those that have all of the given keys
         let mut key_counts: HashMap<Box<[u8]>, usize> = HashMap::new();
-        query_results.iter().for_each(|r| {
+        for r in query_results.iter() {
             if let Some(value) = key_counts.get_mut(r.doc_id.as_ref()) {
                 *value += 1;
             } else {
                 key_counts.insert(r.doc_id.clone(), 1);
             }
-        });
+        }
         let mut matching_rows: HashedArrayTree<QueryResult> = query_results
             .into_iter()
             .filter(|r| key_counts[r.doc_id.as_ref()] == key_count)
@@ -848,7 +848,7 @@ impl Database {
             // caller is free to use &self without conflict
             Ok(mrview)
         } else {
-            panic!("\"{:}\" is not a registered view", view);
+            Err(Error::MissingView(view.to_owned()))
         }
     }
 
@@ -882,7 +882,7 @@ impl Database {
     pub fn delete_index(&mut self, view: &str) -> Result<(), Error> {
         let mut mrview = String::from(VIEW_PREFIX);
         mrview.push_str(view);
-        if let Some(_cf) = self.db.cf_handle(&mrview) {
+        if self.db.cf_handle(&mrview).is_some() {
             self.db.drop_cf(&mrview)?;
         }
         if let Some(idx) = self.views.iter().position(|v| v == view) {
@@ -1126,8 +1126,8 @@ impl<'a> Iterator for QueryIterator<'a> {
                 }
             }
             let doc_id = key[sep_pos + self.key_sep.len()..].to_vec();
-            let seq = value[..self.seq_len].to_vec();
-            if self.is_stale(&doc_id, &seq) {
+            let seq = &value[..self.seq_len];
+            if self.is_stale(&doc_id, seq) {
                 // prune the stale entry so we never see it again
                 // n.b. the result is Ok even if the record never existed
                 let _ = self.db.delete_cf(self.cf, key);
@@ -1432,14 +1432,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn query_on_unknown_view() {
         let db_path = "tmp/test/query_on_unknown_view";
         let _ = fs::remove_dir_all(db_path);
         let views = vec!["viewname".to_owned()];
         let mut dbase =
             Database::open_default(Path::new(db_path), views, Box::new(mapper)).unwrap();
-        let _ = dbase.query("nonesuch");
+        let result = dbase.query("nonesuch");
+        assert!(result.is_err());
+        let err_string = result.unwrap_err().to_string();
+        assert!(err_string.contains("missing view column family"));
     }
 
     #[test]
