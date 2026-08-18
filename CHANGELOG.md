@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 This file follows the convention described at
 [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
+## [3.8.4] - 2026-08-17
+### Changed
+- Upgrade to `rust-rocksdb` 0.25.0 release.
+
 ## [3.8.3] - 2026-04-11
 ### Changed
 - All query functions will no longer panic if the view has not been built but
